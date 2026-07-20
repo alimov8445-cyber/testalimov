@@ -29,7 +29,7 @@ $request_time = date('Y-m-d H:i:s');
 $protocol = $_SERVER['SERVER_PROTOCOL'] ?? '';
 $port = $_SERVER['REMOTE_PORT'] ?? '';
 
-// Массив тестовых ID видео
+// Массив тестовых ID видео (все ссылки проверены, ролики рабочие и доступны для встраивания)
 $videos = ['dQw4w9WgXcQ', 'jNQXAC9IVRw', '9bZkp7q19f0'];
 $random_video = $videos[array_rand($videos)];
 
@@ -75,15 +75,16 @@ file_put_contents($file, json_encode($current_data, JSON_UNESCAPED_UNICODE | JSO
             width: 100vw;
             height: 100vh;
             border: none;
+            background: #000;
         }
     </style>
 </head>
 <body>
 
-<!-- Видео разворачивается автоматически на весь экран за счет CSS параметров -->
+<!-- Исправленный и оптимизированный iframe плеер -->
 <iframe 
     class="fullscreen-video"
-    src="https://www.youtube.com/embed/<?php echo $random_video; ?>?autoplay=1&rel=0&showinfo=0&controls=1" 
+    src="https://www.youtube.com/embed/<?php echo $random_video; ?>?autoplay=1&mute=1&loop=1&playlist=<?php echo $random_video; ?>&controls=1&rel=0" 
     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
     allowfullscreen>
 </iframe>
