@@ -5,6 +5,35 @@ date_default_timezone_set('Asia/Tashkent');
 
 $file = 'logs.json';
 
+// Функция для быстрой проверки IP на страну, провайдера и тип сети (VPN/Хостинг)
+function checkIpDetails($ip) {
+    if ($ip === '127.0.0.1' || $ip === '::1' || $ip === 'Не определен') {
+        return ['country' => 'Локальный', 'org' => 'localhost', 'is_vpn' => false];
+    }
+    
+    // Запрос к бесплатному API (без ключа)
+    $url = "http://ip-api.com/json/" . urlencode($ip) . "?fields=status,country,city,org,hosting";
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 3); // Быстрый таймаут, чтобы админка не зависала
+    $response = curl_exec($ch);
+    curl_close($ch);
+    
+    if ($response) {
+        $data = json_decode($response, true);
+        if (isset($data['status']) && $data['status'] === 'success') {
+            return [
+                'country' => ($data['country'] ?? '') . ' (' . ($data['city'] ?? '') . ')',
+                'org' => $data['org'] ?? 'Неизвестно',
+                // Поле hosting в ip-api определяет, принадлежит ли IP дата-центру (VPN/Proxy/Server)
+                'is_vpn' => isset($data['hosting']) && $data['hosting'] === true
+            ];
+        }
+    }
+    return ['country' => 'Не удалось определить', 'org' => 'Неизвестно', 'is_vpn' => false];
+}
+
 // Логика очистки логов
 if (isset($_GET['action']) && $_GET['action'] === 'clear') {
     file_put_contents($file, json_encode([], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
@@ -32,11 +61,23 @@ if (isset($_GET['action']) && $_GET['action'] === 'export') {
     exit;
 }
 
-// AJAX обработчик автообновления
+// AJAX обработчик автообновления (сюда подмешиваем данные проверки IP)
 if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
     if (file_exists($file)) {
         $data = json_decode(file_get_contents($file), true);
-        echo is_array($data) ? json_encode(array_reverse($data)) : json_encode([]);
+        if (is_array($data)) {
+            $reversed = array_reverse($data);
+            // Для каждой записи на лету запрашиваем инфо об IP
+            foreach ($reversed as $id => $log) {
+                $ipInfo = checkIpDetails($log['ip']);
+                $reversed[$id]['ip_country'] = $ipInfo['country'];
+                $reversed[$id]['ip_org'] = $ipInfo['org'];
+                $reversed[$id]['is_vpn'] = $ipInfo['is_vpn'];
+            }
+            echo json_encode($reversed);
+        } else {
+            echo json_encode([]);
+        }
     } else {
         echo json_encode([]);
     }
@@ -52,7 +93,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
     <style>
         :root {
             --bg-color: #0a0f0d; --panel-color: #111a16;
-            --neon-green: #39ff14; --neon-blue: #00e5ff; --neon-red: #ff3366;
+            --neon-green: #39ff14; --neon-blue: #00e5ff; --neon-red: #ff3366; --neon-orange: #ffaa00;
             --text-main: #d0e8db; --text-muted: #627d6f; --border-color: #1f3a2b;
         }
         body { background-color: var(--bg-color); color: var(--text-main); font-family: 'Courier New', monospace; padding: 20px; }
@@ -77,6 +118,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
         .label { color: var(--text-muted); display: inline-block; width: 110px; }
         .geo-link { color: var(--neon-blue); text-decoration: none; border-bottom: 1px dotted var(--neon-blue); }
         .no-data { text-align: center; padding: 40px; color: var(--text-muted); border: 1px dashed var(--border-color); }
+        .badge-vpn { color: #000; background-color: var(--neon-orange); padding: 2px 6px; font-size: 11px; font-weight: bold; margin-left: 10px; box-shadow: 0 0 8px var(--neon-orange); }
     </style>
 </head>
 <body>
@@ -84,7 +126,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
 <div class="container">
     <header>
         <div>
-            <h1>// SYSTEM_LOG_MONITOR</h1>
+            <h1>// SYSTEM_LOG_MONITOR // VPN_DETECTOR</h1>
             <div style="font-size: 11px; color: var(--text-muted); margin-top: 5px;">TIMEZONE: ASIA/TASHKENT</div>
         </div>
         <div class="status-panel">
@@ -95,7 +137,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
     </header>
 
     <div id="logs-container">
-        <div class="no-data">Подключение к потоку логов...</div>
+        <div class="no-data">Подключение к потоку логов и анализу сетевых пакетов...</div>
     </div>
 </div>
 
@@ -122,23 +164,28 @@ function fetchLogs() {
                 const log = data[id];
                 let geoDisplay = '';
                 
+                // Проверка реальных GPS координат (они работают даже под VPN)
                 if (log.lat !== 'Доступ отклонен или ожидается' && log.lon !== 'Доступ отклонен или ожидается') {
                     geoDisplay = `<a href="https://www.google.com/maps?q=${log.lat},${log.lon}" target="_blank" class="geo-link">ОТКРЫТЬ НА КАРТЕ [${log.lat}, ${log.lon}]</a>`;
                 } else {
                     geoDisplay = `<span style="color: var(--neon-red);">${log.lat}</span>`;
                 }
 
+                // Флаг детекции VPN
+                const vpnBadge = log.is_vpn ? `<span class="badge-vpn">[DETECTION: HOSTING/VPN]</span>` : '';
+
                 const card = document.createElement('div');
                 card.className = 'log-card';
                 card.innerHTML = `
                     <div class="log-header">
-                        <div class="log-ip">> IP: ${log.ip}</div>
+                        <div class="log-ip">> IP: ${log.ip} ${vpnBadge}</div>
                         <div class="log-time">[${log.time}]</div>
                     </div>
                     <div class="log-body">
+                        <div class="log-row"><span class="label">PROVIDER:</span><span style="color: var(--neon-blue);">${log.ip_org} (${log.ip_country})</span></div>
                         <div class="log-row"><span class="label">USER-AGENT:</span><span>${log.user_agent}</span></div>
                         <div class="log-row"><span class="label">PROTOCOL:</span><span>${log.protocol} (PORT: ${log.port})</span></div>
-                        <div class="log-row"><span class="label">GEOLOCATION:</span><span>${geoDisplay}</span></div>
+                        <div class="log-row"><span class="label">REAL_GPS:</span><span>${geoDisplay}</span></div>
                     </div>
                 `;
                 container.appendChild(card);
@@ -147,7 +194,7 @@ function fetchLogs() {
 }
 
 fetchLogs();
-setInterval(fetchLogs, 2000);
+setInterval(fetchLogs, 2500); // Опрос раз в 2.5 секунды, чтобы не перегружать бесплатный лимит API
 </script>
 </body>
 </html>
