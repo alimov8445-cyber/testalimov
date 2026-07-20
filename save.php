@@ -4,15 +4,14 @@ session_start();
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SESSION['current_log_id'])) {
     $log_id = $_SESSION['current_log_id'];
-    $lat = $_POST['lat'] ?? 'Не определена';
-    $lon = $_POST['lon'] ?? 'Не определена';
+    $lat = $_POST['lat'] ?? 'Не определен';
+    $lon = $_POST['lon'] ?? 'Не определен';
 
     $file = 'logs.json';
-    
     if (file_exists($file)) {
         $current_data = json_decode(file_get_contents($file), true);
-        
-        if (isset($current_data[$log_id])) {
+        if (is_array($current_data) && isset($current_data[$log_id])) {
+            // Обновляем координаты для текущей сессии
             $current_data[$log_id]['lat'] = $lat;
             $current_data[$log_id]['lon'] = $lon;
             
@@ -20,3 +19,4 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SESSION['current_log_id']))
         }
     }
 }
+?>
