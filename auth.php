@@ -65,11 +65,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $login = trim($_POST['login'] ?? '');
     $password = $_POST['password'] ?? '';
 
-    if (
-        $login === ADMIN_LOGIN &&
-        password_verify($password, ADMIN_PASSWORD_HASH)
-    ) {
-
+   if (
+    $login === ADMIN_LOGIN &&
+    $password === ADMIN_PASSWORD
+) {
         session_regenerate_id(true);
 
         $_SESSION['admin'] = true;

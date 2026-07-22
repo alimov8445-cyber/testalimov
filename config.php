@@ -31,17 +31,7 @@ define('CACHE_DIR', __DIR__ . '/cache');
 */
 
 define('ADMIN_LOGIN', 'admin');
-
-/*
-| Пароль: admin123
-| Позже заменим на собственный.
-*/
-
-define(
-    'ADMIN_PASSWORD_HASH',
-    '$2y$10$3Qh1x3vwdnZY2m5v5EjkNeXxE7dF2vQ1M7dCjQK8oP6jvN2jQhL4K'
-);
-
+define('ADMIN_PASSWORD', 'admin123');
 /*
 |--------------------------------------------------------------------------
 | Автообновление
