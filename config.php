@@ -5,87 +5,92 @@ session_start();
 
 date_default_timezone_set('Asia/Tashkent');
 
+
 /*
 |--------------------------------------------------------------------------
-| Основные настройки
+| Настройки системы
 |--------------------------------------------------------------------------
 */
 
 define('APP_NAME', 'Network Log Monitor');
-define('APP_VERSION', '2.0');
+
+define('APP_VERSION', '3.0');
+
 
 /*
 |--------------------------------------------------------------------------
-| Файлы
+| Авторизация
 |--------------------------------------------------------------------------
-*/
-
-define('LOG_FILE', __DIR__ . '/logs.json');
-define('CACHE_DIR', __DIR__ . '/cache');
-
-/*
-|--------------------------------------------------------------------------
-| Администратор
-|--------------------------------------------------------------------------
-| Пароль позже можно изменить.
 */
 
 define('ADMIN_LOGIN', 'admin');
+
 define('ADMIN_PASSWORD', 'admin123');
+
+
 /*
 |--------------------------------------------------------------------------
-| Автообновление
+| JSON база
 |--------------------------------------------------------------------------
 */
 
-define('AUTO_REFRESH', 2500);
+define(
+    'LOG_FILE',
+    __DIR__ . '/logs.json'
+);
+
 
 /*
 |--------------------------------------------------------------------------
-| Создание папки cache
-|--------------------------------------------------------------------------
-*/
-
-if (!is_dir(CACHE_DIR)) {
-    mkdir(CACHE_DIR, 0775, true);
-}
-
-/*
-|--------------------------------------------------------------------------
-| Создание logs.json
+| Создание базы если нет
 |--------------------------------------------------------------------------
 */
 
 if (!file_exists(LOG_FILE)) {
+
     file_put_contents(
         LOG_FILE,
-        json_encode([], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE),
+        json_encode(
+            [],
+            JSON_PRETTY_PRINT |
+            JSON_UNESCAPED_UNICODE
+        ),
         LOCK_EX
     );
+
 }
+
+
 
 /*
 |--------------------------------------------------------------------------
-| Загрузка логов
+| Получение логов
 |--------------------------------------------------------------------------
 */
 
 function loadLogs(): array
 {
+
     if (!file_exists(LOG_FILE)) {
+
         return [];
+
     }
 
-    $json = file_get_contents(LOG_FILE);
 
-    if ($json === false || trim($json) === '') {
-        return [];
-    }
+    $data = json_decode(
+        file_get_contents(LOG_FILE),
+        true
+    );
 
-    $data = json_decode($json, true);
 
-    return is_array($data) ? $data : [];
+    return is_array($data)
+        ? $data
+        : [];
+
 }
+
+
 
 /*
 |--------------------------------------------------------------------------
@@ -95,51 +100,22 @@ function loadLogs(): array
 
 function saveLogs(array $logs): bool
 {
-    $fp = fopen(LOG_FILE, 'c+');
 
-    if (!$fp) {
-        return false;
-    }
+    return file_put_contents(
 
-    flock($fp, LOCK_EX);
+        LOG_FILE,
 
-    ftruncate($fp, 0);
-
-    rewind($fp);
-
-    fwrite(
-        $fp,
         json_encode(
+
             $logs,
-            JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE
-        )
-    );
 
-    fflush($fp);
+            JSON_PRETTY_PRINT |
+            JSON_UNESCAPED_UNICODE
 
-    flock($fp, LOCK_UN);
+        ),
 
-    fclose($fp);
+        LOCK_EX
 
-    return true;
-}
+    ) !== false;
 
-/*
-|--------------------------------------------------------------------------
-| Защита CSRF
-|--------------------------------------------------------------------------
-*/
-
-if (empty($_SESSION['csrf'])) {
-    $_SESSION['csrf'] = bin2hex(random_bytes(32));
-}
-
-function csrf(): string
-{
-    return $_SESSION['csrf'];
-}
-
-function verifyCsrf(string $token): bool
-{
-    return hash_equals($_SESSION['csrf'], $token);
 }
