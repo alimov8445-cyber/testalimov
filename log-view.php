@@ -1,56 +1,65 @@
-<<?php
+<?php
 declare(strict_types=1);
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/auth.php';
-require_once __DIR__ . '/geo_module.php';
 
 requireLogin();
 
 
 /*
 |--------------------------------------------------------------------------
-| Обработка действий
+| Безопасная функция GEO
 |--------------------------------------------------------------------------
 */
 
+if (!function_exists('getIpInfo')) {
 
-// Очистка логов
-
-if (
-    isset($_GET['action']) &&
-    $_GET['action'] === 'clear'
-) {
-
-
-    if (
-        isset($_POST['csrf']) &&
-        verifyCsrf($_POST['csrf'])
-    ) {
-
-        saveLogs([]);
-
+    function getIpInfo(string $ip): array
+    {
+        return [
+            'country' => 'Unknown',
+            'city' => 'Unknown',
+            'isp' => 'Unknown',
+            'vpn' => false
+        ];
     }
-
-
-    header(
-        "Location: log-view.php"
-    );
-
-    exit;
 
 }
 
 
+/*
+|--------------------------------------------------------------------------
+| AJAX обновление
+|--------------------------------------------------------------------------
+*/
+
+if (
+    isset($_GET['ajax']) &&
+    $_GET['ajax'] === 'count'
+) {
+
+    header('Content-Type: application/json');
+
+    echo json_encode([
+        'count' => count(loadLogs())
+    ]);
+
+    exit;
+}
 
 
-// Экспорт CSV
+
+/*
+|--------------------------------------------------------------------------
+| Экспорт CSV
+|--------------------------------------------------------------------------
+*/
 
 if (
     isset($_GET['action']) &&
     $_GET['action'] === 'export'
 ) {
-
 
     $logs = loadLogs();
 
@@ -61,13 +70,11 @@ if (
 
 
     header(
-        'Content-Disposition: attachment; filename=network_logs_'
-        .date('Y-m-d_H-i-s')
-        .'.csv'
+        'Content-Disposition: attachment; filename=network_logs.csv'
     );
 
 
-    $out=fopen(
+    $out = fopen(
         'php://output',
         'w'
     );
@@ -82,14 +89,14 @@ if (
     fputcsv($out,[
 
         'ID',
-        'Time',
+        'TIME',
         'IP',
-        'Country',
-        'City',
+        'COUNTRY',
+        'CITY',
         'ISP',
         'VPN',
-        'Latitude',
-        'Longitude'
+        'LAT',
+        'LON'
 
     ]);
 
@@ -118,8 +125,8 @@ if (
             $geo['isp'],
 
             $geo['vpn']
-            ? 'YES'
-            : 'NO',
+                ? 'YES'
+                : 'NO',
 
             $log['lat'] ?? '',
 
@@ -138,6 +145,29 @@ if (
 
 
 
+/*
+|--------------------------------------------------------------------------
+| Очистка логов
+|--------------------------------------------------------------------------
+*/
+
+if (
+    isset($_GET['action']) &&
+    $_GET['action'] === 'clear'
+) {
+
+    saveLogs([]);
+
+    header(
+        'Location: log-view.php'
+    );
+
+    exit;
+
+}
+
+
+
 $logs = array_reverse(
     loadLogs(),
     true
@@ -145,19 +175,17 @@ $logs = array_reverse(
 
 
 
-$total=count($logs);
+$total = count($logs);
 
+$vpnCount = 0;
 
-$vpnCount=0;
-
-
-$countries=[];
+$countries = [];
 
 
 foreach($logs as $log){
 
 
-    $geo=getIpInfo(
+    $geo = getIpInfo(
         $log['ip'] ?? ''
     );
 
@@ -169,20 +197,14 @@ foreach($logs as $log){
     }
 
 
-    $country=$geo['country'];
+    $country =
+        $geo['country'] ?? 'Unknown';
 
 
-    if(!isset($countries[$country])){
-
-        $countries[$country]=0;
-
-    }
-
-
-    $countries[$country]++;
+    $countries[$country] =
+        ($countries[$country] ?? 0)+1;
 
 }
-
 
 ?>
 <!DOCTYPE html>
@@ -192,398 +214,252 @@ foreach($logs as $log){
 
 <meta charset="UTF-8">
 
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
 
-<title>
-<?= APP_NAME ?>
-</title>
-
-
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-
+<title><?= APP_NAME ?></title>
 
 <style>
 
 *{
-    margin:0;
-    padding:0;
-    box-sizing:border-box;
+box-sizing:border-box;
+margin:0;
+padding:0;
+font-family:Arial,sans-serif;
 }
 
 
 body{
 
-    background:#070b14;
+background:#070b14;
 
-    color:#e5e7eb;
-
-    font-family:Inter,Arial,sans-serif;
-
-    min-height:100vh;
+color:white;
 
 }
-
-
-/*
-|--------------------------------------------------------------------------
-| Layout
-|--------------------------------------------------------------------------
-*/
 
 
 .wrapper{
 
-    display:flex;
+display:flex;
 
-    min-height:100vh;
+min-height:100vh;
 
 }
-
 
 
 .sidebar{
 
-    width:260px;
+width:250px;
 
-    background:#0b1220;
+background:#0b1220;
 
-    border-right:1px solid rgba(255,255,255,.08);
-
-    padding:25px;
+padding:25px;
 
 }
-
 
 
 .logo{
 
-    font-size:22px;
+font-size:22px;
 
-    font-weight:700;
+color:#38bdf8;
 
-    color:#38bdf8;
+font-weight:bold;
 
-    margin-bottom:40px;
+margin-bottom:30px;
 
 }
-
 
 
 .menu a{
 
-    display:block;
+display:block;
 
-    color:#94a3b8;
+padding:12px;
 
-    text-decoration:none;
+color:#94a3b8;
 
-    padding:13px;
-
-    border-radius:12px;
-
-    margin-bottom:8px;
-
-    transition:.3s;
+text-decoration:none;
 
 }
-
 
 
 .menu a:hover{
 
-    background:#1e293b;
+background:#1e293b;
 
-    color:white;
+color:white;
 
 }
-
 
 
 .main{
 
-    flex:1;
+flex:1;
 
-    padding:30px;
-
-}
-
-
-
-/*
-|--------------------------------------------------------------------------
-| Header
-|--------------------------------------------------------------------------
-*/
-
-
-.header{
-
-    display:flex;
-
-    justify-content:space-between;
-
-    align-items:center;
-
-    margin-bottom:30px;
+padding:30px;
 
 }
-
-
-
-.title{
-
-    font-size:28px;
-
-    font-weight:700;
-
-}
-
-
-
-.logout{
-
-    color:#f87171;
-
-    text-decoration:none;
-
-}
-
-
-
-/*
-|--------------------------------------------------------------------------
-| Cards
-|--------------------------------------------------------------------------
-*/
-
 
 .cards{
 
-    display:grid;
+display:grid;
 
-    grid-template-columns:
-    repeat(auto-fit,minmax(220px,1fr));
+grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
 
-    gap:20px;
+gap:20px;
 
-    margin-bottom:30px;
+margin-bottom:25px;
 
 }
-
 
 
 .card{
 
-    background:
-    linear-gradient(
-        145deg,
-        rgba(255,255,255,.08),
-        rgba(255,255,255,.02)
-    );
+background:#0b1220;
 
+border:1px solid rgba(255,255,255,.1);
 
-    border:
+border-radius:18px;
 
-    1px solid rgba(255,255,255,.08);
-
-
-    border-radius:20px;
-
-    padding:25px;
-
-
-    backdrop-filter:blur(15px);
+padding:25px;
 
 }
-
 
 
 .card h3{
 
-    color:#94a3b8;
+color:#94a3b8;
 
-    font-size:14px;
+font-size:14px;
 
-    margin-bottom:15px;
+margin-bottom:15px;
 
 }
-
 
 
 .number{
 
-    font-size:34px;
+font-size:32px;
 
-    font-weight:700;
-
-    color:white;
+font-weight:bold;
 
 }
-
-
-
-/*
-|--------------------------------------------------------------------------
-| Table
-|--------------------------------------------------------------------------
-*/
 
 
 .panel{
 
-    background:#0b1220;
+background:#0b1220;
 
-    border-radius:20px;
+border-radius:18px;
 
-    padding:25px;
-
-    border:1px solid rgba(255,255,255,.08);
+padding:25px;
 
 }
-
 
 
 .panel-header{
 
-    display:flex;
+display:flex;
 
-    justify-content:space-between;
+justify-content:space-between;
 
-    align-items:center;
+align-items:center;
 
-    margin-bottom:20px;
+margin-bottom:20px;
 
 }
-
 
 
 .search{
 
-    background:#111827;
+background:#111827;
 
-    border:1px solid #334155;
+border:1px solid #334155;
 
-    color:white;
+color:white;
 
-    padding:12px 15px;
+padding:12px;
 
-    border-radius:12px;
-
-    width:280px;
+border-radius:10px;
 
 }
-
 
 
 table{
 
-    width:100%;
+width:100%;
 
-    border-collapse:collapse;
+border-collapse:collapse;
 
 }
-
 
 
 th{
 
-    text-align:left;
+text-align:left;
 
-    padding:14px;
+padding:12px;
 
-    color:#64748b;
-
-    font-size:13px;
+color:#64748b;
 
 }
-
 
 
 td{
 
-    padding:14px;
+padding:12px;
 
-    border-top:1px solid rgba(255,255,255,.05);
+border-top:1px solid rgba(255,255,255,.05);
 
 }
-
 
 
 .badge{
 
-    padding:5px 10px;
+padding:5px 10px;
 
-    border-radius:20px;
+border-radius:20px;
 
-    font-size:12px;
+font-size:12px;
 
 }
-
 
 
 .green{
 
-    background:#064e3b;
+background:#064e3b;
 
-    color:#34d399;
+color:#34d399;
 
 }
-
 
 
 .red{
 
-    background:#450a0a;
+background:#450a0a;
 
-    color:#f87171;
-
-}
-
-
-
-.blue{
-
-    background:#082f49;
-
-    color:#38bdf8;
+color:#f87171;
 
 }
-
 
 
 .map{
 
-    color:#38bdf8;
+color:#38bdf8;
 
-    text-decoration:none;
-
-}
-
-
-
-@media(max-width:900px){
-
-.sidebar{
-
-    display:none;
+text-decoration:none;
 
 }
 
 
-.main{
+.logout{
 
-    padding:15px;
+color:#f87171;
 
-}
-
-
-.search{
-
-    width:100%;
+text-decoration:none;
 
 }
 
-}
 
 </style>
 
@@ -608,21 +484,33 @@ NET MONITOR
 
 <div class="menu">
 
+<a href="log-view.php">
 
-<a href="#">
-📊 Dashboard
+📊 Логи
+
 </a>
 
 
 <a href="?action=export">
-⬇ Экспорт CSV
+
+⬇ CSV
+
+</a>
+
+
+<a href="?action=clear"
+onclick="return confirm('Очистить логи?')">
+
+🗑 Очистить
+
 </a>
 
 
 <a href="?logout=1">
-🚪 Выход
-</a>
 
+🚪 Выход
+
+</a>
 
 </div>
 
@@ -634,17 +522,16 @@ NET MONITOR
 <main class="main">
 
 
-<div class="header">
+
+<div style="display:flex;justify-content:space-between;margin-bottom:25px">
 
 
-<div class="title">
+<h1>
 
 Система мониторинга
 
-</div>
+</h1>
 
-
-<div>
 
 <a class="logout" href="?logout=1">
 
@@ -652,28 +539,41 @@ NET MONITOR
 
 </a>
 
+
 </div>
+
+
+
+
+
 <div class="cards">
 
 
 <div class="card">
 
 <h3>
+
 ВСЕГО СОЕДИНЕНИЙ
+
 </h3>
 
 <div class="number">
+
 <?= $total ?>
+
 </div>
 
 </div>
+
 
 
 
 <div class="card">
 
 <h3>
-HOSTING / VPN
+
+VPN / HOSTING
+
 </h3>
 
 <div class="number" style="color:#f87171">
@@ -686,10 +586,13 @@ HOSTING / VPN
 
 
 
+
 <div class="card">
 
 <h3>
-УНИКАЛЬНЫЕ СТРАНЫ
+
+СТРАНЫ
+
 </h3>
 
 <div class="number" style="color:#38bdf8">
@@ -702,10 +605,13 @@ HOSTING / VPN
 
 
 
+
 <div class="card">
 
 <h3>
-СТАТУС СИСТЕМЫ
+
+STATUS
+
 </h3>
 
 <div class="number" style="color:#34d399">
@@ -728,7 +634,6 @@ ONLINE
 
 <div class="panel-header">
 
-
 <h2>
 
 Журнал подключений
@@ -742,10 +647,9 @@ id="search"
 
 class="search"
 
-placeholder="Поиск IP, страны, ISP..."
+placeholder="Поиск..."
 
 >
-
 
 </div>
 
@@ -758,35 +662,21 @@ placeholder="Поиск IP, страны, ISP..."
 
 <thead>
 
-
 <tr>
 
-<th>
-Время
-</th>
+<th>Время</th>
 
-<th>
-IP
-</th>
+<th>IP</th>
 
-<th>
-Местоположение
-</th>
+<th>Страна</th>
 
-<th>
-Провайдер
-</th>
+<th>Провайдер</th>
 
-<th>
-VPN
-</th>
+<th>VPN</th>
 
-<th>
-GPS
-</th>
+<th>GPS</th>
 
 </tr>
-
 
 </thead>
 
@@ -795,7 +685,8 @@ GPS
 <tbody>
 
 
-<?php foreach($logs as $id=>$log): ?>
+
+<?php foreach($logs as $log): ?>
 
 
 <?php
@@ -812,9 +703,7 @@ $geo=getIpInfo(
 
 <td>
 
-<?= htmlspecialchars(
-    $log['time'] ?? ''
-) ?>
+<?=htmlspecialchars($log['time'] ?? '')?>
 
 </td>
 
@@ -822,14 +711,7 @@ $geo=getIpInfo(
 
 <td>
 
-<strong>
-
-<?= htmlspecialchars(
-    $log['ip'] ?? ''
-) ?>
-
-</strong>
-
+<?=htmlspecialchars($log['ip'] ?? '')?>
 
 </td>
 
@@ -837,39 +719,21 @@ $geo=getIpInfo(
 
 <td>
 
-
-<?= htmlspecialchars(
-    $geo['country']
-) ?>
-
+<?=htmlspecialchars($geo['country'])?>
 
 <br>
 
-
-<span style="color:#94a3b8">
-
-<?= htmlspecialchars(
-    $geo['city']
-) ?>
-
-</span>
-
+<?=htmlspecialchars($geo['city'])?>
 
 </td>
-
 
 
 
 <td>
 
-
-<?= htmlspecialchars(
-    $geo['isp']
-) ?>
-
+<?=htmlspecialchars($geo['isp'])?>
 
 </td>
-
 
 
 
@@ -878,23 +742,19 @@ $geo=getIpInfo(
 
 <?php if($geo['vpn']): ?>
 
-
 <span class="badge red">
 
 VPN
 
 </span>
 
-
 <?php else: ?>
-
 
 <span class="badge green">
 
 CLEAN
 
 </span>
-
 
 <?php endif; ?>
 
@@ -903,29 +763,23 @@ CLEAN
 
 
 
-
 <td>
 
 
 <?php if(
-    !empty($log['lat']) &&
-    !empty($log['lon'])
+
+!empty($log['lat']) &&
+
+!empty($log['lon'])
+
 ): ?>
 
 
-<a
-
-class="map"
+<a class="map"
 
 target="_blank"
 
-href="https://www.google.com/maps?q=<?= 
-$log['lat']
-?>,<?= 
-$log['lon']
-?>"
-
->
+href="https://www.google.com/maps?q=<?=$log['lat']?>,<?=$log['lon']?>">
 
 🗺 Карта
 
@@ -934,13 +788,7 @@ $log['lon']
 
 <?php else: ?>
 
-
-<span style="color:#64748b">
-
 нет
-
-</span>
-
 
 <?php endif; ?>
 
@@ -948,9 +796,7 @@ $log['lon']
 </td>
 
 
-
 </tr>
-
 
 
 <?php endforeach; ?>
@@ -962,136 +808,83 @@ $log['lon']
 </table>
 
 
-</div> 
-<script>
-
-
-/*
-|--------------------------------------------------------------------------
-| Поиск по таблице
-|--------------------------------------------------------------------------
-*/
-
-
-const search = document.getElementById('search');
-
-
-search.addEventListener('input', function(){
-
-
-    let value = this.value.toLowerCase();
-
-
-    let rows = document.querySelectorAll(
-        '#logsTable tbody tr'
-    );
-
-
-    rows.forEach(row=>{
-
-
-        let text=row.innerText.toLowerCase();
-
-
-        if(text.includes(value)){
-
-
-            row.style.display='';
-
-
-        }else{
-
-
-            row.style.display='none';
-
-
-        }
-
-
-    });
-
-
-});
-
-
-
-/*
-|--------------------------------------------------------------------------
-| Автообновление страницы
-|--------------------------------------------------------------------------
-| Проверка новых логов
-|--------------------------------------------------------------------------
-*/
-
-
-let lastCount = <?= $total ?>;
-
-
-
-setInterval(()=>{
-
-
-fetch('log-view.php?ajax=count')
-
-
-.then(r=>r.json())
-
-
-.then(data=>{
-
-
-    if(data.count > lastCount){
-
-
-        location.reload();
-
-
-    }
-
-
-});
-
-
-},5000);
-<script>
-
-document.addEventListener(
-"DOMContentLoaded",
-()=>{
-
-const clock=document.getElementById(
-"systemClock"
-);
-
-
-if(clock){
-
-setInterval(()=>{
-
-clock.innerText =
-new Date().toLocaleString("ru-RU");
-
-},1000);
-
-}
-
-});
-
-</script>
-
-</body>
-</html>
-
-
-
-</script>
-
+</div>
 
 
 </main>
 
 
 </div>
+
+
+
+
+<script>
+
+
+const search=document.getElementById('search');
+
+
+search.addEventListener(
+'input',
+()=>{
+
+
+let value=search.value.toLowerCase();
+
+
+document.querySelectorAll(
+'#logsTable tbody tr'
+).forEach(row=>{
+
+
+row.style.display =
+row.innerText.toLowerCase()
+.includes(value)
+?
+''
+:
+'none';
+
+
+});
+
+
+});
+
+
+
+let oldCount=<?=$total?>;
+
+
+
+setInterval(()=>{
+
+
+fetch(
+'log-view.php?ajax=count'
+)
+
+.then(r=>r.json())
+
+.then(data=>{
+
+
+if(data.count>oldCount){
+
+location.reload();
+
+}
+
+
+});
+
+
+},5000);
+
+
+
+</script>
 
 
 </body>
