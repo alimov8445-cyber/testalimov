@@ -1,22 +1,127 @@
 <?php
-// save.php
-session_start();
+declare(strict_types=1);
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SESSION['current_log_id'])) {
-    $log_id = $_SESSION['current_log_id'];
-    $lat = $_POST['lat'] ?? 'Не определен';
-    $lon = $_POST['lon'] ?? 'Не определен';
+require_once __DIR__ . '/config.php';
 
-    $file = 'logs.json';
-    if (file_exists($file)) {
-        $current_data = json_decode(file_get_contents($file), true);
-        if (is_array($current_data) && isset($current_data[$log_id])) {
-            // Обновляем координаты для текущей сессии
-            $current_data[$log_id]['lat'] = $lat;
-            $current_data[$log_id]['lon'] = $lon;
-            
-            file_put_contents($file, json_encode($current_data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-        }
-    }
+
+/*
+|--------------------------------------------------------------------------
+| Сохранение GPS координат
+|--------------------------------------------------------------------------
+| Принимает координаты от клиента
+| и обновляет соответствующий лог в logs.json
+|--------------------------------------------------------------------------
+*/
+
+
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+
+    http_response_code(405);
+
+    exit('Method Not Allowed');
+
 }
-?>
+
+
+
+if (!isset($_SESSION['current_log_id'])) {
+
+    http_response_code(403);
+
+    exit('Session log ID missing');
+
+}
+
+
+
+$logId = $_SESSION['current_log_id'];
+
+
+$lat = trim($_POST['lat'] ?? '');
+
+$lon = trim($_POST['lon'] ?? '');
+
+
+
+if ($lat === '' || $lon === '') {
+
+    http_response_code(400);
+
+    exit('Coordinates missing');
+
+}
+
+
+
+/*
+|--------------------------------------------------------------------------
+| Загружаем логи
+|--------------------------------------------------------------------------
+*/
+
+
+$logs = loadLogs();
+
+
+
+if (!isset($logs[$logId])) {
+
+    http_response_code(404);
+
+    exit('Log entry not found');
+
+}
+
+
+
+/*
+|--------------------------------------------------------------------------
+| Обновляем координаты
+|--------------------------------------------------------------------------
+*/
+
+
+$logs[$logId]['lat'] = $lat;
+
+$logs[$logId]['lon'] = $lon;
+
+
+$logs[$logId]['gps_time'] = date(
+    'Y-m-d H:i:s'
+);
+
+
+
+/*
+|--------------------------------------------------------------------------
+| Сохраняем безопасно
+|--------------------------------------------------------------------------
+*/
+
+
+if (saveLogs($logs)) {
+
+    echo json_encode([
+
+        'status'=>'success',
+
+        'message'=>'GPS updated'
+
+    ], JSON_UNESCAPED_UNICODE);
+
+
+} else {
+
+
+    http_response_code(500);
+
+
+    echo json_encode([
+
+        'status'=>'error',
+
+        'message'=>'Save failed'
+
+    ]);
+
+}

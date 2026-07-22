@@ -1,200 +1,1099 @@
-<?php
-// log-view.php
-session_start();
-date_default_timezone_set('Asia/Tashkent');
+<<?php
+declare(strict_types=1);
 
-$file = 'logs.json';
+require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/auth.php';
+require_once __DIR__ . '/geo_module.php';
 
-// Функция для быстрой проверки IP на страну, провайдера и тип сети (VPN/Хостинг)
-function checkIpDetails($ip) {
-    if ($ip === '127.0.0.1' || $ip === '::1' || $ip === 'Не определен') {
-        return ['country' => 'Локальный', 'org' => 'localhost', 'is_vpn' => false];
+requireLogin();
+
+
+/*
+|--------------------------------------------------------------------------
+| Обработка действий
+|--------------------------------------------------------------------------
+*/
+
+
+// Очистка логов
+
+if (
+    isset($_GET['action']) &&
+    $_GET['action'] === 'clear'
+) {
+
+
+    if (
+        isset($_POST['csrf']) &&
+        verifyCsrf($_POST['csrf'])
+    ) {
+
+        saveLogs([]);
+
     }
-    
-    // Запрос к бесплатному API (без ключа)
-    $url = "http://ip-api.com/json/" . urlencode($ip) . "?fields=status,country,city,org,hosting";
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 3); // Быстрый таймаут, чтобы админка не зависала
-    $response = curl_exec($ch);
-    curl_close($ch);
-    
-    if ($response) {
-        $data = json_decode($response, true);
-        if (isset($data['status']) && $data['status'] === 'success') {
-            return [
-                'country' => ($data['country'] ?? '') . ' (' . ($data['city'] ?? '') . ')',
-                'org' => $data['org'] ?? 'Неизвестно',
-                // Поле hosting в ip-api определяет, принадлежит ли IP дата-центру (VPN/Proxy/Server)
-                'is_vpn' => isset($data['hosting']) && $data['hosting'] === true
-            ];
-        }
-    }
-    return ['country' => 'Не удалось определить', 'org' => 'Неизвестно', 'is_vpn' => false];
-}
 
-// Логика очистки логов
-if (isset($_GET['action']) && $_GET['action'] === 'clear') {
-    file_put_contents($file, json_encode([], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-    header('Location: log-view.php');
+
+    header(
+        "Location: log-view.php"
+    );
+
     exit;
+
 }
 
-// Логика экспорта в CSV
-if (isset($_GET['action']) && $_GET['action'] === 'export') {
-    header('Content-Type: text/csv; charset=utf-8');
-    header('Content-Disposition: attachment; filename=network_logs_' . date('Ymd_His') . '.csv');
-    $output = fopen('php://output', 'w');
-    fprintf($output, chr(0xEF).chr(0xBB).chr(0xBF));
-    fputcsv($output, ['ID Сессии', 'Время', 'IP Адрес', 'User-Agent', 'Протокол', 'Порт', 'Lat', 'Lon']);
-    if (file_exists($file)) {
-        $logs = json_decode(file_get_contents($file), true);
-        if (is_array($logs)) {
-            $logs = array_reverse($logs);
-            foreach ($logs as $log) {
-                fputcsv($output, [$log['id']??'', $log['time']??'', $log['ip']??'', $log['user_agent']??'', $log['protocol']??'', $log['port']??'', $log['lat']??'', $log['lon']??'']);
-            }
-        }
+
+
+
+// Экспорт CSV
+
+if (
+    isset($_GET['action']) &&
+    $_GET['action'] === 'export'
+) {
+
+
+    $logs = loadLogs();
+
+
+    header(
+        'Content-Type: text/csv; charset=utf-8'
+    );
+
+
+    header(
+        'Content-Disposition: attachment; filename=network_logs_'
+        .date('Y-m-d_H-i-s')
+        .'.csv'
+    );
+
+
+    $out=fopen(
+        'php://output',
+        'w'
+    );
+
+
+    fprintf(
+        $out,
+        chr(0xEF).chr(0xBB).chr(0xBF)
+    );
+
+
+    fputcsv($out,[
+
+        'ID',
+        'Time',
+        'IP',
+        'Country',
+        'City',
+        'ISP',
+        'VPN',
+        'Latitude',
+        'Longitude'
+
+    ]);
+
+
+
+    foreach($logs as $id=>$log){
+
+
+        $geo=getIpInfo(
+            $log['ip'] ?? ''
+        );
+
+
+        fputcsv($out,[
+
+            $id,
+
+            $log['time'] ?? '',
+
+            $log['ip'] ?? '',
+
+            $geo['country'],
+
+            $geo['city'],
+
+            $geo['isp'],
+
+            $geo['vpn']
+            ? 'YES'
+            : 'NO',
+
+            $log['lat'] ?? '',
+
+            $log['lon'] ?? ''
+
+        ]);
+
     }
-    fclose($output);
+
+
+    fclose($out);
+
     exit;
+
 }
 
-// AJAX обработчик автообновления (сюда подмешиваем данные проверки IP)
-if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
-    if (file_exists($file)) {
-        $data = json_decode(file_get_contents($file), true);
-        if (is_array($data)) {
-            $reversed = array_reverse($data);
-            // Для каждой записи на лету запрашиваем инфо об IP
-            foreach ($reversed as $id => $log) {
-                $ipInfo = checkIpDetails($log['ip']);
-                $reversed[$id]['ip_country'] = $ipInfo['country'];
-                $reversed[$id]['ip_org'] = $ipInfo['org'];
-                $reversed[$id]['is_vpn'] = $ipInfo['is_vpn'];
-            }
-            echo json_encode($reversed);
-        } else {
-            echo json_encode([]);
-        }
-    } else {
-        echo json_encode([]);
+
+
+$logs = array_reverse(
+    loadLogs(),
+    true
+);
+
+
+
+$total=count($logs);
+
+
+$vpnCount=0;
+
+
+$countries=[];
+
+
+foreach($logs as $log){
+
+
+    $geo=getIpInfo(
+        $log['ip'] ?? ''
+    );
+
+
+    if($geo['vpn']){
+
+        $vpnCount++;
+
     }
-    exit;
+
+
+    $country=$geo['country'];
+
+
+    if(!isset($countries[$country])){
+
+        $countries[$country]=0;
+
+    }
+
+
+    $countries[$country]++;
+
 }
+
+
 ?>
 <!DOCTYPE html>
 <html lang="ru">
+
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TERMINAL // LOG_MONITOR</title>
-    <style>
-        :root {
-            --bg-color: #0a0f0d; --panel-color: #111a16;
-            --neon-green: #39ff14; --neon-blue: #00e5ff; --neon-red: #ff3366; --neon-orange: #ffaa00;
-            --text-main: #d0e8db; --text-muted: #627d6f; --border-color: #1f3a2b;
-        }
-        body { background-color: var(--bg-color); color: var(--text-main); font-family: 'Courier New', monospace; padding: 20px; }
-        .container { max-width: 1200px; margin: 0 auto; }
-        header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid var(--border-color); padding-bottom: 15px; margin-bottom: 25px; }
-        h1 { font-size: 22px; margin: 0; color: var(--neon-green); text-shadow: 0 0 8px rgba(57,255,20,0.3); letter-spacing: 2px; }
-        .status-panel { display: flex; align-items: center; gap: 10px; }
-        .live-indicator { width: 10px; height: 10px; background-color: var(--neon-green); border-radius: 50%; box-shadow: 0 0 10px var(--neon-green); animation: pulse 1.5s infinite; }
-        @keyframes pulse { 0%, 100% { transform: scale(0.9); opacity: 0.6; } 50% { transform: scale(1.1); opacity: 1; } }
-        .btn { background: transparent; padding: 8px 16px; font-family: inherit; font-size: 13px; cursor: pointer; text-decoration: none; text-transform: uppercase; transition: all 0.3s; }
-        .btn-export { color: var(--neon-blue); border: 1px solid var(--neon-blue); }
-        .btn-export:hover { background: var(--neon-blue); color: #000; box-shadow: 0 0 10px var(--neon-blue); }
-        .btn-clear { color: var(--neon-red); border: 1px solid var(--neon-red); }
-        .btn-clear:hover { background: var(--neon-red); color: #000; box-shadow: 0 0 10px var(--neon-red); }
-        #logs-container { display: flex; flex-direction: column; gap: 15px; }
-        .log-card { background-color: var(--panel-color); border: 1px solid var(--border-color); border-left: 4px solid var(--border-color); padding: 18px; }
-        .log-card:hover { border-left-color: var(--neon-green); border-color: rgba(57,255,20,0.2); }
-        .log-header { display: flex; justify-content: space-between; border-bottom: 1px dashed var(--border-color); padding-bottom: 8px; margin-bottom: 12px; }
-        .log-ip { color: var(--neon-green); font-weight: bold; }
-        .log-time { color: var(--text-muted); }
-        .log-row { margin-bottom: 6px; font-size: 13px; }
-        .label { color: var(--text-muted); display: inline-block; width: 110px; }
-        .geo-link { color: var(--neon-blue); text-decoration: none; border-bottom: 1px dotted var(--neon-blue); }
-        .no-data { text-align: center; padding: 40px; color: var(--text-muted); border: 1px dashed var(--border-color); }
-        .badge-vpn { color: #000; background-color: var(--neon-orange); padding: 2px 6px; font-size: 11px; font-weight: bold; margin-left: 10px; box-shadow: 0 0 8px var(--neon-orange); }
-    </style>
-</head>
-<body>
 
-<div class="container">
-    <header>
-        <div>
-            <h1>// SYSTEM_LOG_MONITOR // VPN_DETECTOR</h1>
-            <div style="font-size: 11px; color: var(--text-muted); margin-top: 5px;">TIMEZONE: ASIA/TASHKENT</div>
-        </div>
-        <div class="status-panel">
-            <span class="live-indicator"></span>
-            <a href="?action=export" class="btn btn-export">Скачать .CSV</a>
-            <a href="?action=clear" onclick="return confirm('Вы уверены, что хотите очистить все логи?');" class="btn btn-clear">Очистить логи</a>
-        </div>
-    </header>
+<meta charset="UTF-8">
 
-    <div id="logs-container">
-        <div class="no-data">Подключение к потоку логов и анализу сетевых пакетов...</div>
-    </div>
-</div>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-<script>
-let lastLogsJson = '';
+<title>
+<?= APP_NAME ?>
+</title>
 
-function fetchLogs() {
-    fetch('log-view.php?ajax=1')
-        .then(response => response.json())
-        .then(data => {
-            const currentJson = JSON.stringify(data);
-            if (currentJson === lastLogsJson) return;
-            lastLogsJson = currentJson;
 
-            const container = document.getElementById('logs-container');
-            container.innerHTML = '';
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 
-            if (Object.keys(data).length === 0) {
-                container.innerHTML = '<div class="no-data">[ БАЗА ДАННЫХ ПУСТА // ОЖИДАНИЕ ТРАФИКА ]</div>';
-                return;
-            }
 
-            for (let id in data) {
-                const log = data[id];
-                let geoDisplay = '';
-                
-                // Проверка реальных GPS координат (они работают даже под VPN)
-                if (log.lat !== 'Доступ отклонен или ожидается' && log.lon !== 'Доступ отклонен или ожидается') {
-                    geoDisplay = `<a href="https://www.google.com/maps?q=${log.lat},${log.lon}" target="_blank" class="geo-link">ОТКРЫТЬ НА КАРТЕ [${log.lat}, ${log.lon}]</a>`;
-                } else {
-                    geoDisplay = `<span style="color: var(--neon-red);">${log.lat}</span>`;
-                }
+<style>
 
-                // Флаг детекции VPN
-                const vpnBadge = log.is_vpn ? `<span class="badge-vpn">[DETECTION: HOSTING/VPN]</span>` : '';
-
-                const card = document.createElement('div');
-                card.className = 'log-card';
-                card.innerHTML = `
-                    <div class="log-header">
-                        <div class="log-ip">> IP: ${log.ip} ${vpnBadge}</div>
-                        <div class="log-time">[${log.time}]</div>
-                    </div>
-                    <div class="log-body">
-                        <div class="log-row"><span class="label">PROVIDER:</span><span style="color: var(--neon-blue);">${log.ip_org} (${log.ip_country})</span></div>
-                        <div class="log-row"><span class="label">USER-AGENT:</span><span>${log.user_agent}</span></div>
-                        <div class="log-row"><span class="label">PROTOCOL:</span><span>${log.protocol} (PORT: ${log.port})</span></div>
-                        <div class="log-row"><span class="label">REAL_GPS:</span><span>${geoDisplay}</span></div>
-                    </div>
-                `;
-                container.appendChild(card);
-            }
-        }).catch(err => console.error("Ошибка обновления:", err));
+*{
+    margin:0;
+    padding:0;
+    box-sizing:border-box;
 }
 
-fetchLogs();
-setInterval(fetchLogs, 2500); // Опрос раз в 2.5 секунды, чтобы не перегружать бесплатный лимит API
+
+body{
+
+    background:#070b14;
+
+    color:#e5e7eb;
+
+    font-family:Inter,Arial,sans-serif;
+
+    min-height:100vh;
+
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Layout
+|--------------------------------------------------------------------------
+*/
+
+
+.wrapper{
+
+    display:flex;
+
+    min-height:100vh;
+
+}
+
+
+
+.sidebar{
+
+    width:260px;
+
+    background:#0b1220;
+
+    border-right:1px solid rgba(255,255,255,.08);
+
+    padding:25px;
+
+}
+
+
+
+.logo{
+
+    font-size:22px;
+
+    font-weight:700;
+
+    color:#38bdf8;
+
+    margin-bottom:40px;
+
+}
+
+
+
+.menu a{
+
+    display:block;
+
+    color:#94a3b8;
+
+    text-decoration:none;
+
+    padding:13px;
+
+    border-radius:12px;
+
+    margin-bottom:8px;
+
+    transition:.3s;
+
+}
+
+
+
+.menu a:hover{
+
+    background:#1e293b;
+
+    color:white;
+
+}
+
+
+
+.main{
+
+    flex:1;
+
+    padding:30px;
+
+}
+
+
+
+/*
+|--------------------------------------------------------------------------
+| Header
+|--------------------------------------------------------------------------
+*/
+
+
+.header{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    align-items:center;
+
+    margin-bottom:30px;
+
+}
+
+
+
+.title{
+
+    font-size:28px;
+
+    font-weight:700;
+
+}
+
+
+
+.logout{
+
+    color:#f87171;
+
+    text-decoration:none;
+
+}
+
+
+
+/*
+|--------------------------------------------------------------------------
+| Cards
+|--------------------------------------------------------------------------
+*/
+
+
+.cards{
+
+    display:grid;
+
+    grid-template-columns:
+    repeat(auto-fit,minmax(220px,1fr));
+
+    gap:20px;
+
+    margin-bottom:30px;
+
+}
+
+
+
+.card{
+
+    background:
+    linear-gradient(
+        145deg,
+        rgba(255,255,255,.08),
+        rgba(255,255,255,.02)
+    );
+
+
+    border:
+
+    1px solid rgba(255,255,255,.08);
+
+
+    border-radius:20px;
+
+    padding:25px;
+
+
+    backdrop-filter:blur(15px);
+
+}
+
+
+
+.card h3{
+
+    color:#94a3b8;
+
+    font-size:14px;
+
+    margin-bottom:15px;
+
+}
+
+
+
+.number{
+
+    font-size:34px;
+
+    font-weight:700;
+
+    color:white;
+
+}
+
+
+
+/*
+|--------------------------------------------------------------------------
+| Table
+|--------------------------------------------------------------------------
+*/
+
+
+.panel{
+
+    background:#0b1220;
+
+    border-radius:20px;
+
+    padding:25px;
+
+    border:1px solid rgba(255,255,255,.08);
+
+}
+
+
+
+.panel-header{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    align-items:center;
+
+    margin-bottom:20px;
+
+}
+
+
+
+.search{
+
+    background:#111827;
+
+    border:1px solid #334155;
+
+    color:white;
+
+    padding:12px 15px;
+
+    border-radius:12px;
+
+    width:280px;
+
+}
+
+
+
+table{
+
+    width:100%;
+
+    border-collapse:collapse;
+
+}
+
+
+
+th{
+
+    text-align:left;
+
+    padding:14px;
+
+    color:#64748b;
+
+    font-size:13px;
+
+}
+
+
+
+td{
+
+    padding:14px;
+
+    border-top:1px solid rgba(255,255,255,.05);
+
+}
+
+
+
+.badge{
+
+    padding:5px 10px;
+
+    border-radius:20px;
+
+    font-size:12px;
+
+}
+
+
+
+.green{
+
+    background:#064e3b;
+
+    color:#34d399;
+
+}
+
+
+
+.red{
+
+    background:#450a0a;
+
+    color:#f87171;
+
+}
+
+
+
+.blue{
+
+    background:#082f49;
+
+    color:#38bdf8;
+
+}
+
+
+
+.map{
+
+    color:#38bdf8;
+
+    text-decoration:none;
+
+}
+
+
+
+@media(max-width:900px){
+
+.sidebar{
+
+    display:none;
+
+}
+
+
+.main{
+
+    padding:15px;
+
+}
+
+
+.search{
+
+    width:100%;
+
+}
+
+}
+
+</style>
+
+</head>
+
+
+<body>
+
+
+<div class="wrapper">
+
+
+<aside class="sidebar">
+
+
+<div class="logo">
+
+NET MONITOR
+
+</div>
+
+
+<div class="menu">
+
+
+<a href="#">
+📊 Dashboard
+</a>
+
+
+<a href="?action=export">
+⬇ Экспорт CSV
+</a>
+
+
+<a href="?logout=1">
+🚪 Выход
+</a>
+
+
+</div>
+
+
+</aside>
+
+
+
+<main class="main">
+
+
+<div class="header">
+
+
+<div class="title">
+
+Система мониторинга
+
+</div>
+
+
+<div>
+
+<a class="logout" href="?logout=1">
+
+Выйти
+
+</a>
+
+</div>
+<div class="cards">
+
+
+<div class="card">
+
+<h3>
+ВСЕГО СОЕДИНЕНИЙ
+</h3>
+
+<div class="number">
+<?= $total ?>
+</div>
+
+</div>
+
+
+
+<div class="card">
+
+<h3>
+HOSTING / VPN
+</h3>
+
+<div class="number" style="color:#f87171">
+
+<?= $vpnCount ?>
+
+</div>
+
+</div>
+
+
+
+<div class="card">
+
+<h3>
+УНИКАЛЬНЫЕ СТРАНЫ
+</h3>
+
+<div class="number" style="color:#38bdf8">
+
+<?= count($countries) ?>
+
+</div>
+
+</div>
+
+
+
+<div class="card">
+
+<h3>
+СТАТУС СИСТЕМЫ
+</h3>
+
+<div class="number" style="color:#34d399">
+
+ONLINE
+
+</div>
+
+</div>
+
+
+</div>
+
+
+
+
+
+<div class="panel">
+
+
+<div class="panel-header">
+
+
+<h2>
+
+Журнал подключений
+
+</h2>
+
+
+<input
+
+id="search"
+
+class="search"
+
+placeholder="Поиск IP, страны, ISP..."
+
+>
+
+
+</div>
+
+
+
+
+
+<table id="logsTable">
+
+
+<thead>
+
+
+<tr>
+
+<th>
+Время
+</th>
+
+<th>
+IP
+</th>
+
+<th>
+Местоположение
+</th>
+
+<th>
+Провайдер
+</th>
+
+<th>
+VPN
+</th>
+
+<th>
+GPS
+</th>
+
+</tr>
+
+
+</thead>
+
+
+
+<tbody>
+
+
+<?php foreach($logs as $id=>$log): ?>
+
+
+<?php
+
+$geo=getIpInfo(
+    $log['ip'] ?? ''
+);
+
+?>
+
+
+<tr>
+
+
+<td>
+
+<?= htmlspecialchars(
+    $log['time'] ?? ''
+) ?>
+
+</td>
+
+
+
+<td>
+
+<strong>
+
+<?= htmlspecialchars(
+    $log['ip'] ?? ''
+) ?>
+
+</strong>
+
+
+</td>
+
+
+
+<td>
+
+
+<?= htmlspecialchars(
+    $geo['country']
+) ?>
+
+
+<br>
+
+
+<span style="color:#94a3b8">
+
+<?= htmlspecialchars(
+    $geo['city']
+) ?>
+
+</span>
+
+
+</td>
+
+
+
+
+<td>
+
+
+<?= htmlspecialchars(
+    $geo['isp']
+) ?>
+
+
+</td>
+
+
+
+
+<td>
+
+
+<?php if($geo['vpn']): ?>
+
+
+<span class="badge red">
+
+VPN
+
+</span>
+
+
+<?php else: ?>
+
+
+<span class="badge green">
+
+CLEAN
+
+</span>
+
+
+<?php endif; ?>
+
+
+</td>
+
+
+
+
+<td>
+
+
+<?php if(
+    !empty($log['lat']) &&
+    !empty($log['lon'])
+): ?>
+
+
+<a
+
+class="map"
+
+target="_blank"
+
+href="https://www.google.com/maps?q=<?= 
+$log['lat']
+?>,<?= 
+$log['lon']
+?>"
+
+>
+
+🗺 Карта
+
+</a>
+
+
+<?php else: ?>
+
+
+<span style="color:#64748b">
+
+нет
+
+</span>
+
+
+<?php endif; ?>
+
+
+</td>
+
+
+
+</tr>
+
+
+
+<?php endforeach; ?>
+
+
+</tbody>
+
+
+</table>
+
+
+</div> 
+<script>
+
+
+/*
+|--------------------------------------------------------------------------
+| Поиск по таблице
+|--------------------------------------------------------------------------
+*/
+
+
+const search = document.getElementById('search');
+
+
+search.addEventListener('input', function(){
+
+
+    let value = this.value.toLowerCase();
+
+
+    let rows = document.querySelectorAll(
+        '#logsTable tbody tr'
+    );
+
+
+    rows.forEach(row=>{
+
+
+        let text=row.innerText.toLowerCase();
+
+
+        if(text.includes(value)){
+
+
+            row.style.display='';
+
+
+        }else{
+
+
+            row.style.display='none';
+
+
+        }
+
+
+    });
+
+
+});
+
+
+
+/*
+|--------------------------------------------------------------------------
+| Автообновление страницы
+|--------------------------------------------------------------------------
+| Проверка новых логов
+|--------------------------------------------------------------------------
+*/
+
+
+let lastCount = <?= $total ?>;
+
+
+
+setInterval(()=>{
+
+
+fetch('log-view.php?ajax=count')
+
+
+.then(r=>r.json())
+
+
+.then(data=>{
+
+
+    if(data.count > lastCount){
+
+
+        location.reload();
+
+
+    }
+
+
+});
+
+
+},5000);
+<script>
+
+document.addEventListener(
+"DOMContentLoaded",
+()=>{
+
+const clock=document.getElementById(
+"systemClock"
+);
+
+
+if(clock){
+
+setInterval(()=>{
+
+clock.innerText =
+new Date().toLocaleString("ru-RU");
+
+},1000);
+
+}
+
+});
+
 </script>
+
 </body>
+</html>
+
+
+
+</script>
+
+
+
+</main>
+
+
+</div>
+
+
+</body>
+
 </html>
