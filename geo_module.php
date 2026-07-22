@@ -3,296 +3,150 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/config.php';
 
+function emptyIpInfo(string $ip, string $status = 'unknown'): array
+{
+    return [
+        'ip' => $ip,
+        'country' => 'Не определено',
+        'country_code' => '',
+        'city' => 'Не определено',
+        'isp' => 'Не определено',
+        'lat' => null,
+        'lon' => null,
+        'vpn' => false,
+        'proxy' => false,
+        'tor' => false,
+        'hosting' => false,
+        'risk_known' => false,
+        'status' => $status,
+        'cached' => false,
+    ];
+}
 
-/*
-|--------------------------------------------------------------------------
-| Модуль геолокации IP
-|--------------------------------------------------------------------------
-| - Кэширует результаты
-| - Не делает повторные запросы
-| - Работает с JSON
-|--------------------------------------------------------------------------
-*/
-
+function isPublicIp(string $ip): bool
+{
+    return filter_var(
+        $ip,
+        FILTER_VALIDATE_IP,
+        FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+    ) !== false;
+}
 
 function getIpInfo(string $ip): array
 {
-
-    /*
-    |--------------------------------------------------------------------------
-    | Локальные адреса
-    |--------------------------------------------------------------------------
-    */
-
-    if (
-        $ip === '127.0.0.1' ||
-        $ip === '::1' ||
-        filter_var($ip, FILTER_VALIDATE_IP) === false
-    ) {
-
-        return [
-
-            'ip' => $ip,
-
-            'country' => 'Local',
-
-            'city' => 'Localhost',
-
-            'isp' => 'Local Network',
-
-            'lat' => '',
-
-            'lon' => '',
-
-            'hosting' => false,
-
-            'vpn' => false,
-
-            'cached' => false
-
-        ];
-
+    $ip = trim($ip);
+    if (!isPublicIp($ip)) {
+        $local = emptyIpInfo($ip, 'local');
+        $local['country'] = 'Локальная сеть';
+        $local['city'] = 'Локальный адрес';
+        $local['isp'] = 'Локальная сеть';
+        return $local;
     }
 
+    $cacheFile = CACHE_DIR . '/' . hash('sha256', $ip) . '.json';
+    $cacheTtl = max(300, (int)envValue('GEO_CACHE_TTL', '86400'));
 
-    /*
-    |--------------------------------------------------------------------------
-    | Проверка кэша
-    |--------------------------------------------------------------------------
-    */
-
-    $cacheFile = CACHE_DIR . '/' . md5($ip) . '.json';
-
-
-    if (file_exists($cacheFile)) {
-
-
-        $cache = json_decode(
-            file_get_contents($cacheFile),
-            true
-        );
-
-
-        if (is_array($cache)) {
-
-            $cache['cached'] = true;
-
-            return $cache;
-
+    if (is_file($cacheFile) && (time() - (int)filemtime($cacheFile)) < $cacheTtl) {
+        $cached = json_decode((string)file_get_contents($cacheFile), true);
+        if (is_array($cached)) {
+            $cached['cached'] = true;
+            return array_merge(emptyIpInfo($ip), $cached);
         }
-
     }
 
+    $baseUrl = rtrim((string)envValue('IP_GEO_API_URL', 'https://ipwho.is'), '/');
+    $url = $baseUrl . '/' . rawurlencode($ip) . '?lang=ru';
+    $response = null;
 
-
-    /*
-    |--------------------------------------------------------------------------
-    | Запрос IP API
-    |--------------------------------------------------------------------------
-    */
-
-
-    $url =
-    "https://ip-api.com/json/" .
-    urlencode($ip) .
-    "?fields=status,country,city,isp,org,lat,lon,hosting";
-
-
-    $ch = curl_init();
-
-
-    curl_setopt_array($ch,[
-
-        CURLOPT_URL => $url,
-
-        CURLOPT_RETURNTRANSFER => true,
-
-        CURLOPT_TIMEOUT => 5,
-
-        CURLOPT_SSL_VERIFYPEER => true
-
-    ]);
-
-
-    $response = curl_exec($ch);
-
-
-    curl_close($ch);
-
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | Ошибка API
-    |--------------------------------------------------------------------------
-    */
-
-
-    if (!$response) {
-
-
-        return [
-
-            'ip'=>$ip,
-
-            'country'=>'Unknown',
-
-            'city'=>'Unknown',
-
-            'isp'=>'Unknown',
-
-            'lat'=>'',
-
-            'lon'=>'',
-
-            'hosting'=>false,
-
-            'vpn'=>false,
-
-            'cached'=>false
-
-        ];
-
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_CONNECTTIMEOUT => 2,
+            CURLOPT_TIMEOUT => 4,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_HTTPHEADER => ['Accept: application/json'],
+            CURLOPT_USERAGENT => APP_NAME . '/' . APP_VERSION,
+        ]);
+        $body = curl_exec($ch);
+        $httpCode = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        curl_close($ch);
+        if (is_string($body) && $body !== '' && $httpCode >= 200 && $httpCode < 300) {
+            $response = $body;
+        }
+    } elseif (filter_var(ini_get('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN)) {
+        $context = stream_context_create([
+            'http' => [
+                'timeout' => 4,
+                'header' => "Accept: application/json\r\nUser-Agent: " . APP_NAME . '/' . APP_VERSION . "\r\n",
+            ],
+        ]);
+        $body = @file_get_contents($url, false, $context);
+        if (is_string($body) && $body !== '') {
+            $response = $body;
+        }
     }
 
-
-
-    $data=json_decode(
-        $response,
-        true
-    );
-
-
-
-    if (
-        !is_array($data) ||
-        ($data['status'] ?? '') !== 'success'
-    ) {
-
-
-        return [
-
-            'ip'=>$ip,
-
-            'country'=>'Unknown',
-
-            'city'=>'Unknown',
-
-            'isp'=>'Unknown',
-
-            'lat'=>'',
-
-            'lon'=>'',
-
-            'hosting'=>false,
-
-            'vpn'=>false,
-
-            'cached'=>false
-
-        ];
-
+    if ($response === null) {
+        return emptyIpInfo($ip, 'unavailable');
     }
 
+    $data = json_decode($response, true);
+    if (!is_array($data) || ($data['success'] ?? false) !== true) {
+        return emptyIpInfo($ip, 'api_error');
+    }
 
+    $security = is_array($data['security'] ?? null) ? $data['security'] : [];
+    $connection = is_array($data['connection'] ?? null) ? $data['connection'] : [];
+    $riskKnown = $security !== [];
 
-    /*
-    |--------------------------------------------------------------------------
-    | Формирование результата
-    |--------------------------------------------------------------------------
-    */
-
-
-    $result=[
-
-        'ip'=>$ip,
-
-        'country'=>$data['country'] ?? 'Unknown',
-
-        'city'=>$data['city'] ?? 'Unknown',
-
-        'isp'=>$data['isp'] ?? ($data['org'] ?? 'Unknown'),
-
-        'lat'=>$data['lat'] ?? '',
-
-        'lon'=>$data['lon'] ?? '',
-
-
-        /*
-        hosting = датацентр/VPS
-        Это не 100% VPN,
-        поэтому сохраняем отдельно
-        */
-
-        'hosting'=>
-        ($data['hosting'] ?? false) === true,
-
-
-        'vpn'=>
-        ($data['hosting'] ?? false) === true,
-
-
-        'cached'=>false
-
+    $result = [
+        'ip' => $ip,
+        'country' => (string)($data['country'] ?? 'Не определено'),
+        'country_code' => (string)($data['country_code'] ?? ''),
+        'city' => (string)($data['city'] ?? 'Не определено'),
+        'isp' => (string)($connection['isp'] ?? $connection['org'] ?? 'Не определено'),
+        'lat' => validCoordinate($data['latitude'] ?? null, -90, 90),
+        'lon' => validCoordinate($data['longitude'] ?? null, -180, 180),
+        'vpn' => ($security['vpn'] ?? false) === true,
+        'proxy' => ($security['proxy'] ?? false) === true,
+        'tor' => ($security['tor'] ?? false) === true,
+        'hosting' => ($security['hosting'] ?? false) === true,
+        'risk_known' => $riskKnown,
+        'status' => 'ok',
+        'cached' => false,
     ];
 
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | Сохранение кэша
-    |--------------------------------------------------------------------------
-    */
-
-
-    file_put_contents(
-
+    @file_put_contents(
         $cacheFile,
-
-        json_encode(
-            $result,
-            JSON_PRETTY_PRINT |
-            JSON_UNESCAPED_UNICODE
-        ),
-
+        json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
         LOCK_EX
-
     );
 
-
-
     return $result;
-
 }
 
-
-
-/*
-|--------------------------------------------------------------------------
-| Совместимость со старым кодом
-|--------------------------------------------------------------------------
-*/
-
+function getLogGeo(array $log): array
+{
+    $stored = is_array($log['geo'] ?? null) ? $log['geo'] : [];
+    if (!empty($stored['country']) || !empty($stored['city']) || !empty($stored['isp'])) {
+        return array_merge(emptyIpInfo((string)($log['ip'] ?? '')), $stored, ['cached' => true]);
+    }
+    return getIpInfo((string)($log['ip'] ?? ''));
+}
 
 function getApproximateLocation(string $ip): array
 {
-
-    $info=getIpInfo($ip);
-
+    $info = getIpInfo($ip);
+    $coords = ($info['lat'] !== null && $info['lon'] !== null)
+        ? $info['lat'] . ', ' . $info['lon']
+        : 'Не определены';
 
     return [
-
-        'city'=>$info['city'],
-
-        'country'=>$info['country'],
-
-        'coords'=>
-            $info['lat'] .
-            ', ' .
-            $info['lon'],
-
-        'isp'=>$info['isp']
-
+        'city' => $info['city'],
+        'country' => $info['country'],
+        'coords' => $coords,
+        'isp' => $info['isp'],
     ];
-
 }

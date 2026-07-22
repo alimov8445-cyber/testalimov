@@ -3,890 +3,254 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/auth.php';
+require_once __DIR__ . '/geo_module.php';
 
 requireLogin();
+sendSecurityHeaders(true);
 
+$flash = '';
+$flashType = 'success';
 
-/*
-|--------------------------------------------------------------------------
-| Безопасная функция GEO
-|--------------------------------------------------------------------------
-*/
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!validCsrf($_POST['csrf_token'] ?? null)) {
+        http_response_code(419);
+        exit('Сессия устарела.');
+    }
 
-if (!function_exists('getIpInfo')) {
+    $action = (string)($_POST['action'] ?? '');
+    if ($action === 'clear') {
+        saveLogs([]);
+        $_SESSION['flash'] = ['message' => 'Журнал полностью очищен.', 'type' => 'success'];
+        redirectTo('log-view.php');
+    }
 
-    function getIpInfo(string $ip): array
-    {
-        return [
-            'country' => 'Unknown',
-            'city' => 'Unknown',
-            'isp' => 'Unknown',
-            'vpn' => false
+    if ($action === 'refresh_geo') {
+        $logsToUpdate = loadLogs();
+        $updatedGeo = [];
+        $processed = 0;
+        foreach (array_reverse($logsToUpdate, true) as $id => $log) {
+            $stored = is_array($log['geo'] ?? null) ? $log['geo'] : [];
+            if (!empty($stored['country']) || $processed >= 5) {
+                continue;
+            }
+            $info = getIpInfo((string)($log['ip'] ?? ''));
+            $processed++;
+            if ($info['status'] === 'ok' || $info['status'] === 'local') {
+                $updatedGeo[$id] = $info;
+            }
+        }
+
+        if ($updatedGeo !== []) {
+            mutateLogs(static function (array &$logs) use ($updatedGeo): void {
+                foreach ($updatedGeo as $id => $geo) {
+                    if (isset($logs[$id])) {
+                        $logs[$id]['geo'] = $geo;
+                    }
+                }
+            });
+        }
+
+        $_SESSION['flash'] = [
+            'message' => $updatedGeo !== []
+                ? 'Геоданные обновлены для ' . count($updatedGeo) . ' записей.'
+                : 'Новых геоданных для обновления нет или сервис временно недоступен.',
+            'type' => $updatedGeo !== [] ? 'success' : 'warning',
         ];
+        redirectTo('log-view.php');
     }
-
 }
 
-
-/*
-|--------------------------------------------------------------------------
-| AJAX обновление
-|--------------------------------------------------------------------------
-*/
-
-if (
-    isset($_GET['ajax']) &&
-    $_GET['ajax'] === 'count'
-) {
-
-    header('Content-Type: application/json');
-
-    echo json_encode([
-        'count' => count(loadLogs())
-    ]);
-
-    exit;
+if (isset($_SESSION['flash']) && is_array($_SESSION['flash'])) {
+    $flash = (string)($_SESSION['flash']['message'] ?? '');
+    $flashType = (string)($_SESSION['flash']['type'] ?? 'success');
+    unset($_SESSION['flash']);
 }
 
-
-
-/*
-|--------------------------------------------------------------------------
-| Экспорт CSV
-|--------------------------------------------------------------------------
-*/
-
-if (
-    isset($_GET['action']) &&
-    $_GET['action'] === 'export'
-) {
-
+if (($_GET['action'] ?? '') === 'export') {
     $logs = loadLogs();
-
-
-    header(
-        'Content-Type: text/csv; charset=utf-8'
-    );
-
-
-    header(
-        'Content-Disposition: attachment; filename=network_logs.csv'
-    );
-
-
-    $out = fopen(
-        'php://output',
-        'w'
-    );
-
-
-    fprintf(
-        $out,
-        chr(0xEF).chr(0xBB).chr(0xBF)
-    );
-
-
-    fputcsv($out,[
-
-        'ID',
-        'TIME',
-        'IP',
-        'COUNTRY',
-        'CITY',
-        'ISP',
-        'VPN',
-        'LAT',
-        'LON'
-
-    ]);
-
-
-
-    foreach($logs as $id=>$log){
-
-
-        $geo=getIpInfo(
-            $log['ip'] ?? ''
-        );
-
-
-        fputcsv($out,[
-
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename=network_logs_' . date('Y-m-d_H-i') . '.csv');
+    $out = fopen('php://output', 'wb');
+    fwrite($out, "\xEF\xBB\xBF");
+    fputcsv($out, ['ID', 'Время', 'IP', 'Страна', 'Город', 'Провайдер', 'GPS согласие', 'Широта', 'Долгота', 'User-Agent']);
+    foreach ($logs as $id => $log) {
+        $geo = is_array($log['geo'] ?? null) ? $log['geo'] : [];
+        fputcsv($out, [
             $id,
-
             $log['time'] ?? '',
-
             $log['ip'] ?? '',
-
-            $geo['country'],
-
-            $geo['city'],
-
-            $geo['isp'],
-
-            $geo['vpn']
-                ? 'YES'
-                : 'NO',
-
-            $log['lat'] ?? '',
-
-            $log['lon'] ?? ''
-
+            $geo['country'] ?? '',
+            $geo['city'] ?? '',
+            $geo['isp'] ?? '',
+            !empty($log['gps_consent']) ? 'YES' : 'NO',
+            hasGpsCoordinates($log) ? $log['lat'] : '',
+            hasGpsCoordinates($log) ? $log['lon'] : '',
+            $log['user_agent'] ?? '',
         ]);
-
     }
-
-
     fclose($out);
-
     exit;
-
 }
 
-
-
-/*
-|--------------------------------------------------------------------------
-| Очистка логов
-|--------------------------------------------------------------------------
-*/
-
-if (
-    isset($_GET['action']) &&
-    $_GET['action'] === 'clear'
-) {
-
-    saveLogs([]);
-
-    header(
-        'Location: log-view.php'
-    );
-
-    exit;
-
-}
-
-
-
-$logs = array_reverse(
-    loadLogs(),
-    true
-);
-
-
-
-$total = count($logs);
-
-$vpnCount = 0;
-
+$allLogs = array_reverse(loadLogs(), true);
+$total = count($allLogs);
+$uniqueIps = [];
+$gpsCount = 0;
+$riskCount = 0;
 $countries = [];
 
-
-foreach($logs as $log){
-
-
-    $geo = getIpInfo(
-        $log['ip'] ?? ''
-    );
-
-
-    if($geo['vpn']){
-
-        $vpnCount++;
-
-    }
-
-
-    $country =
-        $geo['country'] ?? 'Unknown';
-
-
-    $countries[$country] =
-        ($countries[$country] ?? 0)+1;
-
+foreach ($allLogs as $log) {
+    $ip = trim((string)($log['ip'] ?? ''));
+    if ($ip !== '') $uniqueIps[$ip] = true;
+    if (hasGpsCoordinates($log)) $gpsCount++;
+    $geo = is_array($log['geo'] ?? null) ? $log['geo'] : [];
+    $country = trim((string)($geo['country'] ?? ''));
+    if ($country !== '' && $country !== 'Не определено') $countries[$country] = true;
+    if (!empty($geo['vpn']) || !empty($geo['proxy']) || !empty($geo['tor']) || !empty($geo['hosting'])) $riskCount++;
 }
 
+$query = trim((string)($_GET['q'] ?? ''));
+$filtered = $allLogs;
+if ($query !== '') {
+    $needle = textLower($query);
+    $filtered = array_filter($allLogs, static function (array $log) use ($needle): bool {
+        $geo = is_array($log['geo'] ?? null) ? $log['geo'] : [];
+        $haystack = textLower(implode(' ', [
+            $log['time'] ?? '', $log['ip'] ?? '', $log['user_agent'] ?? '',
+            $geo['country'] ?? '', $geo['city'] ?? '', $geo['isp'] ?? '',
+        ]));
+        return str_contains($haystack, $needle);
+    });
+}
+
+$perPage = 20;
+$page = max(1, (int)($_GET['page'] ?? 1));
+$pages = max(1, (int)ceil(count($filtered) / $perPage));
+$page = min($page, $pages);
+$offset = ($page - 1) * $perPage;
+$pageLogs = array_slice($filtered, $offset, $perPage, true);
+
+function browserLabel(string $ua): string
+{
+    if (stripos($ua, 'Edg/') !== false) return 'Microsoft Edge';
+    if (stripos($ua, 'Chrome/') !== false) return 'Chrome';
+    if (stripos($ua, 'Firefox/') !== false) return 'Firefox';
+    if (stripos($ua, 'Safari/') !== false) return 'Safari';
+    return $ua !== '' ? 'Другой браузер' : 'Не определён';
+}
+
+function pageLink(int $page, string $query): string
+{
+    $params = ['page' => $page];
+    if ($query !== '') $params['q'] = $query;
+    return appUrl('log-view.php?' . http_build_query($params));
+}
 ?>
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ru">
-
 <head>
-
-<meta charset="UTF-8">
-
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-
-<title><?= APP_NAME ?></title>
-
-<style>
-
-*{
-box-sizing:border-box;
-margin:0;
-padding:0;
-font-family:Arial,sans-serif;
-}
-
-
-body{
-
-background:#070b14;
-
-color:white;
-
-}
-
-
-.wrapper{
-
-display:flex;
-
-min-height:100vh;
-
-}
-
-
-.sidebar{
-
-width:250px;
-
-background:#0b1220;
-
-padding:25px;
-
-}
-
-
-.logo{
-
-font-size:22px;
-
-color:#38bdf8;
-
-font-weight:bold;
-
-margin-bottom:30px;
-
-}
-
-
-.menu a{
-
-display:block;
-
-padding:12px;
-
-color:#94a3b8;
-
-text-decoration:none;
-
-}
-
-
-.menu a:hover{
-
-background:#1e293b;
-
-color:white;
-
-}
-
-
-.main{
-
-flex:1;
-
-padding:30px;
-
-}
-
-.cards{
-
-display:grid;
-
-grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
-
-gap:20px;
-
-margin-bottom:25px;
-
-}
-
-
-.card{
-
-background:#0b1220;
-
-border:1px solid rgba(255,255,255,.1);
-
-border-radius:18px;
-
-padding:25px;
-
-}
-
-
-.card h3{
-
-color:#94a3b8;
-
-font-size:14px;
-
-margin-bottom:15px;
-
-}
-
-
-.number{
-
-font-size:32px;
-
-font-weight:bold;
-
-}
-
-
-.panel{
-
-background:#0b1220;
-
-border-radius:18px;
-
-padding:25px;
-
-}
-
-
-.panel-header{
-
-display:flex;
-
-justify-content:space-between;
-
-align-items:center;
-
-margin-bottom:20px;
-
-}
-
-
-.search{
-
-background:#111827;
-
-border:1px solid #334155;
-
-color:white;
-
-padding:12px;
-
-border-radius:10px;
-
-}
-
-
-table{
-
-width:100%;
-
-border-collapse:collapse;
-
-}
-
-
-th{
-
-text-align:left;
-
-padding:12px;
-
-color:#64748b;
-
-}
-
-
-td{
-
-padding:12px;
-
-border-top:1px solid rgba(255,255,255,.05);
-
-}
-
-
-.badge{
-
-padding:5px 10px;
-
-border-radius:20px;
-
-font-size:12px;
-
-}
-
-
-.green{
-
-background:#064e3b;
-
-color:#34d399;
-
-}
-
-
-.red{
-
-background:#450a0a;
-
-color:#f87171;
-
-}
-
-
-.map{
-
-color:#38bdf8;
-
-text-decoration:none;
-
-}
-
-
-.logout{
-
-color:#f87171;
-
-text-decoration:none;
-
-}
-
-
-</style>
-
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Журнал — <?= h(APP_NAME) ?></title>
+  <link rel="stylesheet" href="<?= h(appUrl('assets/app.css')) ?>">
 </head>
-
-
 <body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand"><div class="brand-mark">N</div><div><strong>NET MONITOR</strong><small>Версия <?= h(APP_VERSION) ?></small></div></div>
+    <nav class="nav">
+      <a class="active" href="<?= h(appUrl('log-view.php')) ?>">▦ Журнал</a>
+      <a href="<?= h(appUrl('dashboard.php')) ?>">◫ Аналитика</a>
+      <a href="<?= h(appUrl('map.php')) ?>">⌖ Карта GPS</a>
+      <a href="<?= h(appUrl('index.php')) ?>" target="_blank" rel="noopener">↗ Публичная страница</a>
+      <div class="nav-spacer"></div>
+      <a href="<?= h(appUrl('log-view.php?action=export')) ?>">↓ Экспорт CSV</a>
+      <form method="post" action="<?= h(appUrl('auth.php')) ?>">
+        <input type="hidden" name="csrf_token" value="<?= h(csrfToken()) ?>"><input type="hidden" name="action" value="logout">
+        <button class="danger" type="submit">↪ Выйти</button>
+      </form>
+    </nav>
+  </aside>
 
+  <main class="main">
+    <div class="container">
+      <header class="topbar">
+        <div><div class="eyebrow">Мониторинг подключений</div><h1>Журнал событий</h1><p class="subtitle">Публичный адрес: <span class="mono"><?= h(APP_URL) ?></span></p></div>
+        <div class="actions">
+          <form method="post" action="<?= h(appUrl('log-view.php')) ?>">
+            <input type="hidden" name="csrf_token" value="<?= h(csrfToken()) ?>"><input type="hidden" name="action" value="refresh_geo">
+            <button class="btn" type="submit">⌁ Обновить GEO (до 5)</button>
+          </form>
+          <form method="post" action="<?= h(appUrl('log-view.php')) ?>" onsubmit="return confirm('Удалить все записи журнала?')">
+            <input type="hidden" name="csrf_token" value="<?= h(csrfToken()) ?>"><input type="hidden" name="action" value="clear">
+            <button class="btn danger" type="submit">⌫ Очистить</button>
+          </form>
+        </div>
+      </header>
 
-<div class="wrapper">
+      <?php if (isUsingDefaultAdminPassword()): ?>
+        <div class="notice"><strong>Важно:</strong> используется стандартный пароль. В Railway добавьте переменную <span class="mono">ADMIN_PASSWORD</span> с новым сложным паролем.</div>
+      <?php endif; ?>
+      <?php if ($flash !== ''): ?><div class="notice" style="<?= $flashType === 'warning' ? '' : 'border-color:rgba(52,211,153,.28);background:rgba(6,78,59,.22);color:#a7f3d0' ?>"><?= h($flash) ?></div><?php endif; ?>
 
+      <section class="grid">
+        <article class="card metric"><div class="label">Все события</div><div class="value"><?= $total ?></div><div class="hint">За весь период хранения</div></article>
+        <article class="card metric"><div class="label">Уникальные IP</div><div class="value"><?= count($uniqueIps) ?></div><div class="hint">По текущему журналу</div></article>
+        <article class="card metric"><div class="label">GPS с согласием</div><div class="value"><?= $gpsCount ?></div><div class="hint">Точные координаты</div></article>
+        <article class="card metric"><div class="label">Известные страны</div><div class="value"><?= count($countries) ?></div><div class="hint"><?= $riskCount ?> сигналов риска</div></article>
+      </section>
 
-<aside class="sidebar">
+      <section class="panel">
+        <div class="panel-head">
+          <div><h2>Последние подключения</h2><div class="muted" style="margin-top:6px;font-size:13px">Найдено: <?= count($filtered) ?></div></div>
+          <form method="get" action="<?= h(appUrl('log-view.php')) ?>" style="display:flex;gap:8px;width:min(470px,100%)">
+            <input class="search" name="q" value="<?= h($query) ?>" placeholder="IP, страна, город, браузер…">
+            <button class="btn small" type="submit">Найти</button>
+          </form>
+        </div>
 
+        <?php if ($pageLogs === []): ?>
+          <div class="empty">Записи не найдены.</div>
+        <?php else: ?>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Время</th><th>IP / браузер</th><th>География</th><th>Провайдер</th><th>Риск</th><th>GPS</th></tr></thead>
+            <tbody>
+            <?php foreach ($pageLogs as $log): $geo = is_array($log['geo'] ?? null) ? array_merge(emptyIpInfo((string)($log['ip'] ?? '')), $log['geo']) : emptyIpInfo((string)($log['ip'] ?? '')); ?>
+              <tr>
+                <td><div><?= h($log['time'] ?? '') ?></div><div class="muted" style="font-size:12px;margin-top:4px"><?= h($log['protocol'] ?? '') ?></div></td>
+                <td><div class="mono"><?= h($log['ip'] ?? '') ?></div><div class="muted" title="<?= h($log['user_agent'] ?? '') ?>" style="font-size:12px;margin-top:5px"><?= h(browserLabel((string)($log['user_agent'] ?? ''))) ?></div></td>
+                <td><div><?= h($geo['country']) ?></div><div class="muted" style="font-size:12px;margin-top:4px"><?= h($geo['city']) ?></div></td>
+                <td><?= h($geo['isp']) ?></td>
+                <td>
+                  <?php if (!$geo['risk_known']): ?><span class="badge neutral">Нет данных</span>
+                  <?php elseif ($geo['vpn'] || $geo['proxy'] || $geo['tor'] || $geo['hosting']): ?><span class="badge danger">Обнаружен</span>
+                  <?php else: ?><span class="badge success">Чисто</span><?php endif; ?>
+                </td>
+                <td>
+                  <?php if (hasGpsCoordinates($log)): $coords = $log['lat'] . ',' . $log['lon']; ?>
+                    <a class="btn small" target="_blank" rel="noopener noreferrer" href="https://www.google.com/maps?q=<?= h(rawurlencode($coords)) ?>">Открыть карту</a>
+                  <?php else: ?><span class="badge neutral">Не предоставлен</span><?php endif; ?>
+                </td>
+              </tr>
+            <?php endforeach; ?>
+            </tbody>
+          </table>
+        </div>
+        <?php endif; ?>
 
-<div class="logo">
-
-NET MONITOR
-
+        <div class="pagination">
+          <span>Страница <?= $page ?> из <?= $pages ?></span>
+          <div class="actions">
+            <?php if ($page > 1): ?><a class="btn small" href="<?= h(pageLink($page - 1, $query)) ?>">← Назад</a><?php endif; ?>
+            <?php if ($page < $pages): ?><a class="btn small" href="<?= h(pageLink($page + 1, $query)) ?>">Вперёд →</a><?php endif; ?>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
 </div>
-
-
-<div class="menu">
-
-<a href="log-view.php">
-
-📊 Логи
-
-</a>
-
-
-<a href="?action=export">
-
-⬇ CSV
-
-</a>
-
-
-<a href="?action=clear"
-onclick="return confirm('Очистить логи?')">
-
-🗑 Очистить
-
-</a>
-
-
-<a href="?logout=1">
-
-🚪 Выход
-
-</a>
-
-</div>
-
-
-</aside>
-
-
-
-<main class="main">
-
-
-
-<div style="display:flex;justify-content:space-between;margin-bottom:25px">
-
-
-<h1>
-
-Система мониторинга
-
-</h1>
-
-
-<a class="logout" href="?logout=1">
-
-Выйти
-
-</a>
-
-
-</div>
-
-
-
-
-
-<div class="cards">
-
-
-<div class="card">
-
-<h3>
-
-ВСЕГО СОЕДИНЕНИЙ
-
-</h3>
-
-<div class="number">
-
-<?= $total ?>
-
-</div>
-
-</div>
-
-
-
-
-<div class="card">
-
-<h3>
-
-VPN / HOSTING
-
-</h3>
-
-<div class="number" style="color:#f87171">
-
-<?= $vpnCount ?>
-
-</div>
-
-</div>
-
-
-
-
-<div class="card">
-
-<h3>
-
-СТРАНЫ
-
-</h3>
-
-<div class="number" style="color:#38bdf8">
-
-<?= count($countries) ?>
-
-</div>
-
-</div>
-
-
-
-
-<div class="card">
-
-<h3>
-
-STATUS
-
-</h3>
-
-<div class="number" style="color:#34d399">
-
-ONLINE
-
-</div>
-
-</div>
-
-
-</div>
-
-
-
-
-
-<div class="panel">
-
-
-<div class="panel-header">
-
-<h2>
-
-Журнал подключений
-
-</h2>
-
-
-<input
-
-id="search"
-
-class="search"
-
-placeholder="Поиск..."
-
->
-
-</div>
-
-
-
-
-
-<table id="logsTable">
-
-
-<thead>
-
-<tr>
-
-<th>Время</th>
-
-<th>IP</th>
-
-<th>Страна</th>
-
-<th>Провайдер</th>
-
-<th>VPN</th>
-
-<th>GPS</th>
-
-</tr>
-
-</thead>
-
-
-
-<tbody>
-
-
-
-<?php foreach($logs as $log): ?>
-
-
-<?php
-
-$geo=getIpInfo(
-    $log['ip'] ?? ''
-);
-
-?>
-
-
-<tr>
-
-
-<td>
-
-<?=htmlspecialchars($log['time'] ?? '')?>
-
-</td>
-
-
-
-<td>
-
-<?=htmlspecialchars($log['ip'] ?? '')?>
-
-</td>
-
-
-
-<td>
-
-<?=htmlspecialchars($geo['country'])?>
-
-<br>
-
-<?=htmlspecialchars($geo['city'])?>
-
-</td>
-
-
-
-<td>
-
-<?=htmlspecialchars($geo['isp'])?>
-
-</td>
-
-
-
-<td>
-
-
-<?php if($geo['vpn']): ?>
-
-<span class="badge red">
-
-VPN
-
-</span>
-
-<?php else: ?>
-
-<span class="badge green">
-
-CLEAN
-
-</span>
-
-<?php endif; ?>
-
-
-</td>
-
-
-
-<td>
-
-
-<?php if(
-
-!empty($log['lat']) &&
-
-!empty($log['lon'])
-
-): ?>
-
-
-<a class="map"
-
-target="_blank"
-
-href="https://www.google.com/maps?q=<?=$log['lat']?>,<?=$log['lon']?>">
-
-🗺 Карта
-
-</a>
-
-
-<?php else: ?>
-
-нет
-
-<?php endif; ?>
-
-
-</td>
-
-
-</tr>
-
-
-<?php endforeach; ?>
-
-
-</tbody>
-
-
-</table>
-
-
-</div>
-
-
-</main>
-
-
-</div>
-
-
-
-
-<script>
-
-
-const search=document.getElementById('search');
-
-
-search.addEventListener(
-'input',
-()=>{
-
-
-let value=search.value.toLowerCase();
-
-
-document.querySelectorAll(
-'#logsTable tbody tr'
-).forEach(row=>{
-
-
-row.style.display =
-row.innerText.toLowerCase()
-.includes(value)
-?
-''
-:
-'none';
-
-
-});
-
-
-});
-
-
-
-let oldCount=<?=$total?>;
-
-
-
-setInterval(()=>{
-
-
-fetch(
-'log-view.php?ajax=count'
-)
-
-.then(r=>r.json())
-
-.then(data=>{
-
-
-if(data.count>oldCount){
-
-location.reload();
-
-}
-
-
-});
-
-
-},5000);
-
-
-
-</script>
-
-
+<nav class="mobile-nav"><a class="active" href="<?= h(appUrl('log-view.php')) ?>">▦<br>Логи</a><a href="<?= h(appUrl('dashboard.php')) ?>">◫<br>Графики</a><a href="<?= h(appUrl('map.php')) ?>">⌖<br>Карта</a><a href="<?= h(appUrl('index.php')) ?>">↗<br>Сайт</a></nav>
 </body>
-
 </html>

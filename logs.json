@@ -1,15 +1,1 @@
-{
-  "ip":"",
-  "time":"",
-  "user_agent":"",
-  "protocol":"",
-  "port":"",
-  "lat":"",
-  "lon":"",
-  "geo":{
-    "country":"",
-    "city":"",
-    "isp":"",
-    "vpn":false
-  }
-}
+[]
